@@ -342,6 +342,20 @@ input[type=color]::-webkit-color-swatch { border: 0; border-radius: 4px; }
 .glyphs .glyph:hover { transform: translateY(-1px); box-shadow: 0 0 0 2px var(--gold-glow); }
 .glyph.manual { box-shadow: inset 0 0 0 2px var(--gold); }
 .glyph-hint { margin: 6px 0 0; }
+.glyph.loaded { box-shadow: inset 0 0 0 1.5px #9a9da8; outline: 1px dashed #9a9da8; outline-offset: -4px; }
+.style-actions { margin-top: 10px; }
+.style-row { margin-top: 10px; font-size: 11.5px; color: var(--text-2); display: flex; align-items: center; gap: 6px; }
+.style-row b { color: var(--gold); font-weight: 600; }
+.style-row button { margin-left: auto; color: var(--text-3); font-size: 11px; }
+.style-row button:hover { color: var(--danger); }
+.style-menu { left: 0; right: auto; top: auto; bottom: calc(100% + 6px); width: 250px; }
+.style-menu .empty { margin: 4px; }
+.style-list { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.style-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 7px; background: var(--bg-2); border: 1px solid var(--line); font-size: 12px; }
+.style-item span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.style-item small { color: var(--text-3); }
+.modal-input { width: 100%; height: 34px; margin: -8px 0 18px; padding: 0 10px; border-radius: 8px; background: var(--panel-2); border: 1px solid var(--line); outline: none; }
+.modal-input:focus { border-color: var(--gold); box-shadow: 0 0 0 3px var(--gold-soft); }
 .modal.glyph-modal { width: 460px; display: flex; flex-direction: column; gap: 10px; }
 .glyph-modal p { margin: 0; }
 .glyph-variants { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 8px; max-height: 360px; overflow-y: auto; }

@@ -49,6 +49,51 @@ def test_ocr():
     check("save after edits", os.path.getsize(out) > 1000)
 
 
+def test_rotated_page_edit():
+    """Phone scans often have /Rotate: rewriting handwriting must replace it in place."""
+    import io
+    import numpy as np
+    import pymupdf as fitz
+    from PIL import Image, ImageDraw, ImageFont
+    from engine.document import Session, _view_matrix
+    font = ImageFont.truetype(os.path.join(os.environ["WINDIR"], "Fonts", "Inkfree.ttf"), 64)
+    img = Image.new("RGB", (900, 110), "white")
+    ImageDraw.Draw(img).text((10, 10), "Firmato Giulia", font=font, fill=(25, 40, 110))
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    for rot in (0, 90, 270):
+        doc = fitz.open()
+        p = doc.new_page(width=595, height=842)
+        p.set_cropbox(fitz.Rect(20, 30, 580, 820))
+        p.set_rotation(rot)
+        target = fitz.Rect(60, 200, 330, 233)                     # where it appears on screen
+        p.insert_image(target * ~_view_matrix(p), stream=buf.getvalue(), rotate=rot)
+        path = os.path.join(tempfile.mkdtemp(), "rot.pdf")
+        doc.save(path)
+        s = Session()
+        s.open(path)
+        ink = s.analyze(0)["ink"]
+        if not ink:
+            check(f"rotation {rot}: handwriting found", False)
+            continue
+        line = fitz.Rect(ink[0]["bbox"])
+        check(f"rotation {rot}: line found where it is shown", target.contains((line.tl + line.br) / 2),
+              str([round(v) for v in line]))
+        s.edit_ink(0, 0, "Anna")
+        page = s.doc[0]
+
+        def ink_share(rect):    # dark pixels in a displayed area, as the user sees the page
+            pix = page.get_pixmap(clip=rect, dpi=144)
+            a = np.frombuffer(pix.samples, np.uint8).reshape(pix.h, pix.w, pix.n)[:, :, :3].mean(axis=2)
+            return float((a < 140).mean())
+        start = fitz.Rect(line.x0, line.y0 - 4, line.x0 + line.width * 0.4, line.y1 + 4)
+        tail = fitz.Rect(line.x0 + line.width * 0.6, line.y0, line.x1, line.y1)
+        elsewhere = fitz.Rect(page.rect.x0, line.y1 + line.height * 2, page.rect.x1, page.rect.y1)
+        check(f"rotation {rot}: new writing on the old line", ink_share(start) > 0.02, f"{ink_share(start):.3f}")
+        check(f"rotation {rot}: old writing covered", ink_share(tail) < 0.01, f"{ink_share(tail):.3f}")
+        check(f"rotation {rot}: nothing written elsewhere", ink_share(elsewhere) < 0.001, f"{ink_share(elsewhere):.4f}")
+
+
 def _sha(p):
     with open(p, "rb") as f:
         return hashlib.sha256(f.read()).hexdigest()
@@ -101,7 +146,7 @@ def test_release_check():
 
 
 if __name__ == "__main__":
-    for t in (test_ocr, test_portable_swap, test_setup_script, test_release_check):
+    for t in (test_ocr, test_rotated_page_edit, test_portable_swap, test_setup_script, test_release_check):
         try:
             t()
         except Exception as e:

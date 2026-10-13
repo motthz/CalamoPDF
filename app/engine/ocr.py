@@ -144,7 +144,7 @@ def _native_rects(page):
             continue
         for l in b["lines"]:
             if "".join(s["text"] for s in l["spans"]).strip():
-                rects.append(fitz.Rect(l["bbox"]))
+                rects.append(fitz.Rect(l["bbox"]) * page.rotation_matrix)   # as displayed, like the OCR
     return rects
 
 

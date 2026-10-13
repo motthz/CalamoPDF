@@ -58,20 +58,28 @@ function busy(text, frac) {
   $("#busyBar").style.width = frac == null ? "0" : Math.round(frac * 100) + "%";
   $("#busyBar").parentElement.style.display = frac == null ? "none" : "";
 }
-function modal(title, text, buttons) {
+function modal(title, text, buttons, input) {
   return new Promise(resolve => {
     $("#modalTitle").textContent = title;
     $("#modalText").textContent = text;
+    const inp = $("#modalInput");
+    inp.hidden = input == null;
+    inp.value = input || "";
     const box = $("#modalActions");
     box.innerHTML = "";
+    const done = value => { $("#modal").hidden = true; inp.onkeydown = null; resolve(input == null ? value : (value ? inp.value.trim() : null)); };
     buttons.forEach(([label, value, cls]) => {
       const b = document.createElement("button");
       b.className = "btn sm " + (cls || "");
       b.textContent = label;
-      b.onclick = () => { $("#modal").hidden = true; resolve(value); };
+      b.onclick = () => done(value);
       box.appendChild(b);
     });
     $("#modal").hidden = false;
+    if (input != null) {
+      inp.onkeydown = e => { e.stopPropagation(); if (e.key === "Enter") done(true); if (e.key === "Escape") done(false); };
+      setTimeout(() => { inp.focus(); inp.select(); }, 30);
+    }
   });
 }
 function status(msg) { $("#stMsg").textContent = msg || ""; }
@@ -93,6 +101,7 @@ window.addEventListener("pywebviewready", async () => {
   renderRecent(b.recent);
   updateLearning(b.learning);
   setDocUI(false);
+  call("styles").then(renderStyles).catch(() => {});
   if (!S.settings.tutorialDone) startTour();
   if (b.startup) openPath(b.startup);
   setTimeout(() => checkUpdate(false), 2500);
@@ -328,6 +337,7 @@ function setCurrent(i) {
     const th = S.pages[i].th;
     th.scrollIntoView({ block: "nearest", behavior: "smooth" });
     renderInkList();
+    refreshHand();          // every page has its own handwriting
   }
 }
 function goToPage(i, y) {
@@ -377,7 +387,7 @@ function setTool(t) {
   st.className = "stage tool-" + t;
   $("#stTool").textContent = TOOL_NAMES[t];
   if (t === "hand" && !S.glyphCount)
-    toast("Analizza una pagina scritta a mano per far imparare la calligrafia. Nel frattempo uso un carattere calligrafico.", "warn");
+    toast("Questa pagina non ha ancora una calligrafia: analizzala, oppure usa una calligrafia ricordata. Nel frattempo uso un carattere calligrafico.", "warn");
 }
 $("#stage").className = "stage tool-edit";
 setDocUI(false);
@@ -405,6 +415,9 @@ function bindOverlay(P) {
     } else if (S.tool === "text") {
       startNewText(P, pt);
     } else if (S.tool === "hand") {
+      // clicking existing handwriting edits it in place instead of writing a new line
+      const ink = e.target.closest(".ink");
+      if (ink) return openInk(P, (P.data.ink || []).find(l => l.id === +ink.dataset.id), ink);
       openHandNew(P, pt, e);
     }
   });
@@ -698,11 +711,11 @@ const previewHand = debounce(async () => {
   }
   $("#inkPreviewEmpty").textContent = "Anteprima";
   try {
-    const r = await call("preview_hand", text, h, $("#inkColor").value);
+    const r = await call("preview_hand", S.pop.P.i, text, h, $("#inkColor").value);
     if (!r) return;
     img.src = r.img; img.hidden = false; $("#inkPreviewEmpty").hidden = true;
     const pct = Math.round(r.coverage * 100);
-    $("#inkCoverage").textContent = S.glyphCount ? `${pct}% lettere dalla calligrafia appresa` : "Carattere calligrafico (nessuna lettera appresa)";
+    $("#inkCoverage").textContent = r.coverage > 0 ? `${pct}% lettere dalla calligrafia della pagina` : "Carattere calligrafico (la pagina non ha lettere apprese)";
     positionPop();
   } catch (e) { /* preview is best effort */ }
 }, 220);
@@ -736,7 +749,7 @@ async function teach(page, id, text) {
   S.inkCache[page] = r.ink;
   const P = S.pages[page];
   if (P.data) { P.data.ink = r.ink; drawOverlay(P); }
-  applyHand(r.hand);
+  applyHand(r.hand, page);
   updateLearning(r.stats);
   renderInkList();
   toast(r.learned ? "Grazie! Ho imparato la correzione e la userò d'ora in poi." : "Lettura aggiornata.", "ok");
@@ -778,7 +791,7 @@ async function setInkKind(page, id, kind) {
   S.inkCache[page] = r.ink;
   const P = S.pages[page];
   if (P.data) { P.data.ink = r.ink; drawOverlay(P); }
-  applyHand(r.hand);
+  applyHand(r.hand, page);
   renderInkList();
   toast(kind === "print" ? "Riga segnata come stampata: non verrà usata per la calligrafia." :
     "Riga segnata come scritta a mano: le sue lettere entrano nella calligrafia.", "ok");
@@ -849,7 +862,7 @@ async function analyze(all) {
       found += r.ink.length;
       const P = S.pages[i];
       if (P.data) { P.data.ink = r.ink; drawOverlay(P); }
-      applyHand(r.hand);
+      applyHand(r.hand, i);
     }
     S.doc = await call("info");
     renderInkList();
@@ -863,25 +876,52 @@ async function analyze(all) {
     }
   } catch (e) { toast(e.message, "err"); } finally { busy(false); }
 }
-function applyHand(h) {
-  if (!h) return;
+function applyHand(h, page) {
+  // the panel shows the handwriting of the current page only
+  if (!h || (page != null && page !== S.current)) return;
   S.glyphCount = h.glyphs.length;
+  $("#handPageLabel").textContent = S.doc ? `· pagina ${S.current + 1}` : "";
   S.handInk = h.ink;
   $("#inkSwatch").style.background = h.ink;
   $("#handMeta").textContent = h.glyphs.length
     ? `${h.glyphs.length} caratteri appresi${h.words ? ` da ${h.words} parole` : ""}${h.manual ? ` · ${h.manual} segnati da te` : ""}`
     : "Nessuna lettera appresa";
-  $("#lettersStats").textContent = h.manual ? `Hai segnato ${h.manual} lettere e numeri: restano anche negli altri documenti.` : "Nessuna lettera segnata a mano.";
-  $("#glyphs").innerHTML = h.glyphs.map(g => `<div class="glyph${g.manual ? " manual" : ""}" data-char="${esc(g.char)}" title="“${esc(g.char)}” · ${g.count} esempi${g.manual ? `, ${g.manual} segnati da te` : ""}"><img src="${g.img}"><span>${esc(g.char)}</span></div>`).join("");
+  const lo = $("#styleLoaded");
+  lo.hidden = !h.loadedName;
+  if (h.loadedName) {
+    lo.innerHTML = `<svg><use href="#i-pen"/></svg><span>Usa anche “<b>${esc(h.loadedName)}</b>” per le lettere mancanti</span><button title="Smetti di usarla su questa pagina">Togli</button>`;
+    $("button", lo).onclick = () => applyStyle(null);
+  }
+  $("#glyphs").innerHTML = h.glyphs.map(g => `<div class="glyph${g.manual ? " manual" : ""}${g.loaded ? " loaded" : ""}" data-char="${esc(g.char)}" title="“${esc(g.char)}” · ${g.count} esempi${g.manual ? `, ${g.manual} segnati da te` : ""}${g.loaded ? " (dalla calligrafia ricordata)" : ""}"><img src="${g.img}"><span>${esc(g.char)}</span></div>`).join("");
   $$("#glyphs .glyph").forEach(el => el.onclick = () => openGlyph(el.dataset.char));
 }
 async function refreshHand() {
   try {
-    const r = await call("hand_summary");
+    const page = S.doc ? Math.max(S.current, 0) : 0;
+    const r = await call("hand_summary", page);
+    if (S.doc && page !== Math.max(S.current, 0)) return;   // the user moved on meanwhile
     applyHand(r.hand);
     updateLearning(r.learning);
     S.handHeight = r.height;
   } catch (e) { /* no document yet */ }
+}
+async function applyStyle(name) {
+  await guarded(async () => {
+    const r = await call("load_style", S.current, name);
+    applyHand(r.hand);
+    S.handHeight = r.height;
+    toast(name ? `Uso “${name}” sulla pagina ${S.current + 1} per le lettere che mancano.` : "Calligrafia ricordata tolta da questa pagina.", "ok");
+  });
+}
+function renderStyles(list) {
+  const box = $("#styleList");
+  box.innerHTML = list.length ? list.map(st => `<div class="style-item"><span>${esc(st.name)}</span><small>${st.chars} caratteri</small>
+    <button class="icon-btn danger" data-name="${esc(st.name)}" title="Dimentica questa calligrafia"><svg><use href="#i-trash"/></svg></button></div>`).join("")
+    : `<p class="muted small">Nessuna calligrafia ricordata.</p>`;
+  $$("button", box).forEach(b => b.onclick = async () => {
+    const ok = await modal("Dimenticare la calligrafia?", `“${b.dataset.name}” non sarà più disponibile. Le pagine già scritte non cambiano.`, [["Annulla", false, "ghost"], ["Dimentica", true, "primary"]]);
+    if (ok) guarded(async () => renderStyles(await call("delete_style", b.dataset.name)));
+  });
 }
 function updateLearning(st) {
   if (!st) return;
@@ -895,7 +935,8 @@ function updateLearning(st) {
 async function openGlyph(ch) {
   await guarded(async () => {
     S.glyphChar = ch;
-    renderGlyphVariants(await call("glyph_variants", ch));
+    S.glyphPage = S.current;
+    renderGlyphVariants(await call("glyph_variants", S.glyphPage, ch));
     $("#glyphModal").hidden = false;
   });
 }
@@ -907,8 +948,8 @@ function renderGlyphVariants(list) {
   box.innerHTML = list.map(v => `<div class="glyph${v.kind === "manual" ? " manual" : ""}"><img src="${v.img}">
     <button data-kind="${v.kind}" data-i="${v.i}" title="Elimina questo esempio"><svg><use href="#i-trash"/></svg></button></div>`).join("");
   $$("button", box).forEach(b => b.onclick = () => guarded(async () => {
-    const r = await call("delete_glyph", ch, b.dataset.kind, +b.dataset.i);
-    applyHand(r.hand);
+    const r = await call("delete_glyph", S.glyphPage, ch, b.dataset.kind, +b.dataset.i);
+    applyHand(r.hand, S.glyphPage);
     renderGlyphVariants(r.variants);
   }));
 }
@@ -1073,10 +1114,10 @@ const LETTER_COMMANDS = {
       S.inkCache[page] = r.ink;
       const P = S.pages[page];
       if (P.data) { P.data.ink = r.ink; drawOverlay(P); }
-      applyHand(r.hand);
+      applyHand(r.hand, page);
       updateLearning(r.stats);
       renderInkList();
-      toast(`Salvate ${r.stored} lettere e numeri nella tua calligrafia.`, "ok");
+      toast(`Salvate ${r.stored} lettere e numeri nella calligrafia della pagina ${page + 1}.`, "ok");
     });
   },
 };
@@ -1200,9 +1241,21 @@ const COMMANDS = {
   glyphClose: () => { $("#glyphModal").hidden = true; },
   checkUpdate: () => checkUpdate(true),
   tutorial: () => startTour(),
-  forgetLetters: async () => {
-    const ok = await modal("Dimenticare le lettere segnate?", "Calamo cancellerà tutte le lettere e i numeri che hai segnato a mano.", [["Annulla", false, "ghost"], ["Dimentica", true, "primary"]]);
-    if (ok) guarded(async () => applyHand(await call("forget_letters")));
+  saveStyle: async () => {
+    if (!S.glyphCount) return toast("Questa pagina non ha ancora lettere apprese: analizzala o segna le lettere prima.", "warn");
+    const name = await modal("Ricorda questa calligrafia", `Dai un nome alla calligrafia della pagina ${S.current + 1} (per esempio chi l'ha scritta). Potrai usarla su altre pagine o documenti quando vuoi.`,
+      [["Annulla", false, "ghost"], ["Ricorda", true, "primary"]], "");
+    if (!name) return;
+    await guarded(async () => { renderStyles(await call("save_style", S.current, name)); toast(`Calligrafia “${name}” ricordata.`, "ok"); });
+  },
+  styleMenu: async () => {
+    const menu = $("#styleMenu");
+    if (!menu.hidden) { menu.hidden = true; return; }
+    const list = await call("styles").catch(() => []);
+    menu.innerHTML = list.length ? list.map(st => `<button data-name="${esc(st.name)}"><svg><use href="#i-pen"/></svg><div><b>${esc(st.name)}</b><small>${st.chars} caratteri</small></div></button>`).join("")
+      : `<div class="empty">Nessuna calligrafia ricordata.<br>Usa <b>Ricorda…</b> su una pagina già letta.</div>`;
+    $$("button", menu).forEach(b => b.onclick = () => { menu.hidden = true; applyStyle(b.dataset.name); });
+    menu.hidden = false;
   },
   resetLearning: async () => {
     const ok = await modal("Dimenticare le correzioni?", "Calamo cancellerà tutte le letture che gli hai insegnato.", [["Annulla", false, "ghost"], ["Dimentica", true, "primary"]]);
@@ -1213,7 +1266,7 @@ function cmd(name) { const f = COMMANDS[name]; if (f) f(); }
 document.addEventListener("click", e => {
   const b = e.target.closest("[data-cmd]");
   if (b && !b.disabled) { cmd(b.dataset.cmd); return; }
-  if (!e.target.closest(".menu-wrap")) $("#exportMenu").hidden = true;
+  if (!e.target.closest(".menu-wrap")) { $("#exportMenu").hidden = true; $("#styleMenu").hidden = true; }
 });
 $$("#tools button").forEach(b => b.onclick = () => setTool(b.dataset.tool));
 $$("#tabs button").forEach(b => b.onclick = () => {
@@ -1309,9 +1362,11 @@ const TOUR = [
   { icon: "i-sparkle", title: "Leggi la scrittura a mano",
     text: "Premi “Leggi scrittura”. Le righe scritte a mano sono evidenziate in blu, quelle stampate in grigio (non vengono usate per la calligrafia), quelle dubbie in rosso con un “?”." },
   { icon: "i-letters", title: "Correggi e segna le lettere",
-    text: "Clicca una riga per correggerne la lettura. Con “Segna lettere” indichi dove si trova ogni lettera e numero: Calamo li ricorda anche negli altri documenti e la calligrafia diventa sempre più completa." },
+    text: "Clicca una riga per correggerne la lettura. Con “Segna lettere” indichi dove si trova ogni lettera e numero, così la calligrafia della pagina diventa più completa." },
+  { icon: "i-layers", title: "Una calligrafia per pagina",
+    text: "Ogni pagina può essere scritta da una persona diversa, quindi ognuna ha la sua calligrafia. Se vuoi riusarne una, premi “Ricorda…” e poi, su un'altra pagina o documento, “Usa una ricordata”." },
   { icon: "i-pen", title: "Scrivi con la tua calligrafia", keys: ["H"],
-    text: "Con lo strumento A mano clicca un punto della pagina e scrivi: il testo viene composto con le lettere apprese, nello stesso inchiostro. Poi salva o esporta in Word ed Excel." },
+    text: "Con lo strumento A mano clicca un punto vuoto della pagina e scrivi, oppure clicca una scritta esistente per riscriverla: il testo viene composto con le lettere della pagina, nello stesso inchiostro. Poi salva o esporta in Word ed Excel." },
   { icon: "i-download", title: "Sempre aggiornato",
     text: "Quando su GitHub esce una nuova versione, Calamo la scarica da solo e la installa alla chiusura. Puoi disattivarlo nelle Impostazioni." },
 ];

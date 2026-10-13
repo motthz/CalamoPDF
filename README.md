@@ -20,7 +20,8 @@
 | ✍️ **Modifica diretta del testo** | Clicca su una frase e riscrivila sul posto. Font, dimensione, colore, grassetti e corsivi restano quelli originali; i paragrafi vanno a capo da soli e vengono riscritte solo le righe che cambiano. |
 | 🖋️ **Scrittura a mano con la tua calligrafia** | Calamo legge il testo scritto a mano, impara la forma delle lettere di chi ha scritto e riscrive le nuove frasi con lo stesso tratto, dimensione e colore d'inchiostro. |
 | 🧠 **Impara dalle tue correzioni** | Se legge male una parola, scrivi cosa c'è davvero: la correzione viene ricordata e applicata in automatico le volte successive, e le lettere vengono ri-etichettate. |
-| 🔠 **Segna lettere e numeri** | Indica tu dove si trova ogni lettera e ogni numero di una riga scritta a mano: questi caratteri hanno la precedenza e restano anche negli altri documenti, così la calligrafia diventa sempre più completa. |
+| 🔠 **Segna lettere e numeri** | Indica tu dove si trova ogni lettera e ogni numero di una riga scritta a mano: questi caratteri hanno la precedenza, così la calligrafia della pagina diventa più completa. |
+| 📄 **Una calligrafia per pagina** | Ogni pagina può essere scritta da una persona diversa: la calligrafia appresa resta legata alla sua pagina. Se vuoi riusarla, la *ricordi* con un nome e la usi su altre pagine o documenti solo quando lo scegli tu. |
 | 🖨️ **Distingue stampa e scrittura a mano** | Il testo stampato delle scansioni viene riconosciuto come tale (in grigio) e non sporca la calligrafia; si può comunque correggere e riscrivere. |
 | 🔄 **Aggiornamenti automatici** | Quando su GitHub esce una nuova versione, Calamo la scarica in background e la installa alla chiusura. |
 | 📄 **Esporta in Word ed Excel** | `.docx` con stili, immagini, tabelle e testo scritto a mano; `.xlsx` con le tabelle in fogli formattati (numeri e percentuali riconosciuti). |
@@ -46,7 +47,7 @@ Requisiti: Windows 10/11 a 64 bit con WebView2 (già presente su Windows 11). Pe
 | A mano | `H` | Clicca e scrivi: il testo viene composto con la calligrafia appresa dal documento. |
 | Gomma | `E` | Trascina per cancellare un'area (utile sulle scansioni). |
 
-**Scrittura a mano:** premi **Leggi scrittura** (o *Analizza pagina* nel pannello *Scrittura*). Le righe scritte a mano vengono evidenziate in blu, quelle stampate in grigio, quelle dubbie in rosso con un `?`. Cliccando una riga puoi correggerne la lettura, dire se è *A mano* o *Stampato* e aprire **Segna lettere**: ogni riquadro è un carattere, clicca un riquadro e digita la lettera o il numero (passa da solo al successivo), trascina i bordi per spostarli, *Dividi*/*Unisci* per correggere la segmentazione. Nel pannello *La tua calligrafia* clicca una lettera per vederne gli esempi ed eliminare quelli sbagliati.
+**Scrittura a mano:** premi **Leggi scrittura** (o *Analizza pagina* nel pannello *Scrittura*). Le righe scritte a mano vengono evidenziate in blu, quelle stampate in grigio, quelle dubbie in rosso con un `?`. Cliccando una riga puoi correggerne la lettura, dire se è *A mano* o *Stampato* e aprire **Segna lettere**: ogni riquadro è un carattere, clicca un riquadro e digita la lettera o il numero (passa da solo al successivo), trascina i bordi per spostarli, *Dividi*/*Unisci* per correggere la segmentazione. Nel pannello *Calligrafia di questa pagina* clicca una lettera per vederne gli esempi ed eliminare quelli sbagliati; *Ricorda…* salva la calligrafia della pagina con un nome e *Usa una ricordata* la applica alla pagina corrente (solo per le lettere che le mancano). Con lo strumento *A mano* puoi anche cliccare una scritta esistente per riscriverla.
 
 Al primo avvio un breve tutorial spiega le funzioni principali (si può rivedere da *Impostazioni → Guida*).
 
@@ -54,7 +55,8 @@ Al primo avvio un breve tutorial spiega le funzioni principali (si può rivedere
 
 - **Testo digitale** — `PyMuPDF` estrae blocchi, righe e span con font e stile. Alla modifica il testo viene rimosso con una *redaction* mirata e riscritto con il font incorporato nel PDF (se contiene i glifi necessari) oppure con il font di sistema più simile.
 - **Scrittura a mano** — l'OCR di Windows (`Windows.Media.Ocr`) fornisce una prima lettura; nelle parole fatte di cifre le lettere simili a numeri (`O`→`0`, `l`→`1`, `S`→`5`…) vengono corrette. Ogni riga viene classificata come scritta a mano o stampata (allineamento della linea di base, regolarità delle altezze, lettere unite, colore dell'inchiostro): solo le righe a mano insegnano la calligrafia. Le parole vengono segmentate in lettere usando il testo riconosciuto (e corretto) come etichetta, oppure i riquadri segnati dall'utente. Il nuovo testo viene composto con le lettere originali, con piccole variazioni naturali, e inserito al posto della riga dopo aver coperto l'originale con il colore della carta.
-- **Memoria** — correzioni, lettere segnate (`calligrafia.json`) e impostazioni sono salvate in `%APPDATA%\CalamoPDF`.
+- **Memoria** — correzioni di lettura, calligrafie ricordate per nome (`calligrafie.json`) e impostazioni sono salvate in `%APPDATA%\CalamoPDF`. Le lettere apprese da una pagina non vengono salvate da sole.
+- **Pagine ruotate** — le scansioni da telefono hanno spesso `/Rotate` e un cropbox spostato: le coordinate mostrate a schermo (e lette dall'OCR) vengono convertite in quelle della pagina con la stessa trasformazione che MuPDF usa per il rendering, così le modifiche finiscono esattamente dove le vedi.
 - **Aggiornamenti** — all'avvio l'app legge l'ultima release di GitHub; se è più recente scarica l'installer (copia installata) o il nuovo `CalamoPDF.exe` (copia portabile) e lo applica dopo la chiusura.
 
 ## Pubblicare una nuova versione

@@ -9,6 +9,7 @@ import pymupdf as fitz
 import numpy as np
 
 from . import fonts as F
+from . import handwriting as HW
 from .handwriting import HandwritingLibrary
 from .ocr import Learning, analyze_page
 
@@ -28,6 +29,64 @@ def _rgb(hexstr):
     return tuple(int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
 
 
+def _mupdf_ctm(page):
+    """MuPDF's PDF space -> displayed coordinates (what rendering uses)."""
+    mb, ctm = fitz.mupdf.FzRect(), fitz.mupdf.FzMatrix()
+    fitz.mupdf.pdf_page_transform(fitz._as_pdf_page(page), mb, ctm)
+    return fitz.Matrix(ctm.a, ctm.b, ctm.c, ctm.d, ctm.e, ctm.f)
+
+
+def _view_matrix(page):
+    """Page coordinates (drawing, text extraction) -> displayed coordinates (what the user
+    sees and the OCR reads). Built like MuPDF does for rendering, so it is right also on
+    pages with /Rotate and a cropbox not at the origin (where page.rotation_matrix is not)."""
+    if not page.rotation:
+        return fitz.Identity
+    try:
+        return ~page.transformation_matrix * _mupdf_ctm(page)
+    except Exception:
+        return page.rotation_matrix
+
+
+def _unrot(page, rect):
+    """Displayed coordinates -> the page's own coordinates, used to draw on it."""
+    return fitz.Rect(rect) * ~_view_matrix(page)
+
+
+def _shown(page, rect):
+    """Text extraction / search coordinates -> displayed coordinates."""
+    return fitz.Rect(rect) * page.rotation_matrix
+
+
+def _to_text(page, rect):
+    """Displayed coordinates -> the coordinates of text and redactions."""
+    return fitz.Rect(rect) * page.derotation_matrix
+
+
+def _write_upright(page, tw):
+    """Write a TextWriter filled in displayed coordinates so the text lands exactly there,
+    reading horizontally, whatever the page rotation and cropbox.
+
+    write_text puts the text in PDF space with its own matrix (P -> P * tw.ctm), then
+    prepends a cropbox shift; we add the matrix that maps all of that back onto the view."""
+    try:
+        cb, mb = page.cropbox_position, page.mediabox
+        delta = page.rect.height - page.rect.width if page.rotation in (90, 270) else 0
+        shift = fitz.Identity
+        if bool(cb) or mb.y0 != 0 or delta != 0:
+            shift = fitz.Matrix(1, 0, 0, 1, cb.x, cb.y + mb.y0 - delta)
+        m = ~tw.ctm * ~_mupdf_ctm(page) * ~shift
+    except Exception:
+        return tw.write_text(page)
+    if abs(m.a - 1) + abs(m.b) + abs(m.c) + abs(m.d - 1) + abs(m.e) + abs(m.f) < 1e-6:
+        return tw.write_text(page)
+    tw.write_text(page, matrix=m)
+
+
+def _image_upright(page, rect, png):
+    page.insert_image(_unrot(page, rect), stream=png, overlay=True, rotate=page.rotation)
+
+
 class Session:
     MAX_UNDO = 40
 
@@ -38,7 +97,7 @@ class Session:
         self.dirty = False
         self.undo_stack, self.redo_stack = [], []
         self.ink = {}            # page index -> [ink line]
-        self.hand = HandwritingLibrary()
+        self.hands = {}          # page index -> HandwritingLibrary: each page has its own writer
         self.learning = Learning()
         self.resolver = None
         self.version = 0         # bumps on every change, per page versions below
@@ -55,8 +114,7 @@ class Session:
             self.doc, self.path = doc, path
             self.dirty = False
             self.undo_stack, self.redo_stack = [], []
-            self.ink, self.page_versions = {}, {}
-            self.hand.clear()
+            self.ink, self.page_versions, self.hands = {}, {}, {}
             self.resolver = F.FontResolver(doc)
             self.version += 1
             return self.info()
@@ -68,8 +126,7 @@ class Session:
             self.doc, self.path = doc, None
             self.dirty = True
             self.undo_stack, self.redo_stack = [], []
-            self.ink, self.page_versions = {}, {}
-            self.hand.clear()
+            self.ink, self.page_versions, self.hands = {}, {}, {}
             self.resolver = F.FontResolver(doc)
             self.version += 1
             return self.info()
@@ -95,7 +152,7 @@ class Session:
 
     # ------------------------------------------------------------------ undo
     def _checkpoint(self):
-        self.undo_stack.append((self.doc.tobytes(), copy.deepcopy(self.ink), dict(self.page_versions)))
+        self.undo_stack.append((self.doc.tobytes(), copy.deepcopy(self.ink), dict(self.page_versions), dict(self.hands)))
         if len(self.undo_stack) > self.MAX_UNDO:
             self.undo_stack.pop(0)
         self.redo_stack.clear()
@@ -109,8 +166,8 @@ class Session:
     def _restore(self, src, dst):
         if not src:
             return self.info()
-        dst.append((self.doc.tobytes(), copy.deepcopy(self.ink), dict(self.page_versions)))
-        data, ink, versions = src.pop()
+        dst.append((self.doc.tobytes(), copy.deepcopy(self.ink), dict(self.page_versions), dict(self.hands)))
+        data, ink, versions, self.hands = src.pop()
         self.doc = fitz.open(stream=data, filetype="pdf")
         self.resolver = F.FontResolver(self.doc)
         self.ink = ink
@@ -155,14 +212,19 @@ class Session:
     TEXT_FLAGS = fitz.TEXT_PRESERVE_WHITESPACE | fitz.TEXT_PRESERVE_LIGATURES | fitz.TEXT_MEDIABOX_CLIP
 
     @staticmethod
-    def _line_list(b):
+    def _line_list(b, page):
+        """Lines of a block in displayed coordinates. Only text that reads horizontally
+        on screen is editable in place (on a rotated page that is rotated text)."""
+        upright = fitz.Point(1, 0) * fitz.Matrix(-page.rotation)
         lines = []
         for l in b["lines"]:
-            if l.get("dir", (1, 0))[0] < 0.99:      # rotated text is not editable in place
+            d = l.get("dir", (1, 0))
+            if d[0] * upright.x + d[1] * upright.y < 0.99:
                 return []
-            spans = [s for s in l["spans"] if s["text"]]
+            spans = [dict(s, origin=tuple(fitz.Point(s["origin"]) * page.rotation_matrix))
+                     for s in l["spans"] if s["text"]]
             if spans:
-                lines.append({"bbox": fitz.Rect(l["bbox"]), "spans": spans,
+                lines.append({"bbox": _shown(page, l["bbox"]), "spans": spans,
                               "text": "".join(s["text"] for s in spans)})
         return lines
 
@@ -204,21 +266,22 @@ class Session:
             for bi, b in enumerate(d["blocks"]):
                 if b.get("type") != 0:
                     continue
-                lines = self._line_list(b)
+                lines = self._line_list(b, page)
                 if not lines or not "".join(x["text"] for x in lines).strip():
                     continue
-                text, _, _ = self._paragraph(lines, fitz.Rect(b["bbox"]))
+                brect = _shown(page, b["bbox"])
+                text, _, _ = self._paragraph(lines, brect)
                 spans = [s for l in lines for s in l["spans"] if s["text"].strip()] or lines[0]["spans"]
                 main = max(spans, key=lambda s: len(s["text"]))
                 bold, italic, serif, mono = F.style_from(F.clean_name(main["font"]), main["flags"])
                 o0, o1 = lines[0]["spans"][0]["origin"], lines[-1]["spans"][0]["origin"]
                 lh = (o1[1] - o0[1]) / (len(lines) - 1) if len(lines) > 1 else main["size"] * 1.2
                 out.append({
-                    "id": bi, "bbox": list(b["bbox"]), "text": text, "nlines": len(lines),
+                    "id": bi, "bbox": list(brect), "text": text, "nlines": len(lines),
                     "font": F.clean_name(main["font"]), "css": F.css_family(main["font"], main["flags"]),
                     "size": round(main["size"], 2), "color": _hex(main["color"]),
                     "bold": bold, "italic": italic, "lineHeight": lh,
-                    "align": self._align(lines[0]["bbox"], fitz.Rect(b["bbox"])) if len(lines) == 1 else "left",
+                    "align": self._align(lines[0]["bbox"], brect) if len(lines) == 1 else "left",
                     "firstBaseline": o0[1],
                 })
             return {"blocks": out, "ink": self._ink_public(index), "version": self.page_versions.get(index, 0)}
@@ -232,7 +295,7 @@ class Session:
             for cand in d["blocks"]:
                 if cand.get("type") != 0:
                     continue
-                r = fitz.Rect(cand["bbox"])
+                r = _shown(page, cand["bbox"])
                 inter = r & target
                 if inter.is_empty:
                     continue
@@ -243,7 +306,7 @@ class Session:
                 raise RuntimeError("Il testo è cambiato nel frattempo: riprova.")
         else:
             b = d["blocks"][ref]
-        return b, self._line_list(b)
+        return b, self._line_list(b, page)
 
     @staticmethod
     def _runs(text, styles):
@@ -315,7 +378,7 @@ class Session:
             b, lines = self._raw_block(page, block_ref)
             if not lines:
                 raise RuntimeError("Questo testo non è modificabile (ruotato).")
-            brect = fitz.Rect(b["bbox"])
+            brect = _shown(page, b["bbox"])
             old, old_styles, starts = self._paragraph(lines, brect)
             if new_text == old and not style:
                 return self.blocks(index)
@@ -391,14 +454,14 @@ class Session:
                         redact.append(lines[k]["bbox"])
                     break
             for r in redact:
-                page.add_redact_annot(self._shrink(r))
+                page.add_redact_annot(_to_text(page, self._shrink(r)))
             if redact:
                 page.apply_redactions(**REDACT_KW)
             tws = []
             for x, y, runs in writers:
                 self._write_runs(page, tws, x, y, runs, style)
             for tw in tws:
-                tw.write_text(page)
+                _write_upright(page, tw)
             self._touch(index)
             res = self.blocks(index)
             grown = len(writers) + first_dirty > len(lines)
@@ -428,7 +491,7 @@ class Session:
             b, lines = self._raw_block(page, block_id)
             self._checkpoint()
             for l in lines:
-                page.add_redact_annot(self._shrink(l["bbox"]))
+                page.add_redact_annot(_to_text(page, self._shrink(l["bbox"])))
             page.apply_redactions(**REDACT_KW)
             self._touch(index)
             return self.blocks(index)
@@ -443,11 +506,9 @@ class Session:
             font, _ = F.system_font(family, bool(style.get("bold")), bool(style.get("italic")))
             size = float(style.get("size") or 12)
             tw = fitz.TextWriter(page.rect, color=_rgb(style.get("color") or "#111111"))
-            yy = y + size * 0.8
-            for line in text.replace("\r", "").split("\n"):
-                tw.append((x, yy), line, font=font, fontsize=size)
-                yy += size * 1.25
-            tw.write_text(page)
+            for k, line in enumerate(text.replace("\r", "").split("\n")):
+                tw.append((x, y + size * 0.8 + size * 1.25 * k), line, font=font, fontsize=size)
+            _write_upright(page, tw)
             self._touch(index)
             return self.blocks(index)
 
@@ -458,9 +519,9 @@ class Session:
             r = fitz.Rect(rect)
             self._checkpoint()
             bg = self._background(page, r)
-            page.add_redact_annot(r, fill=False)
+            page.add_redact_annot(_to_text(page, r), fill=False)
             page.apply_redactions(**REDACT_KW)
-            page.draw_rect(r, color=None, fill=bg, overlay=True)
+            page.draw_rect(_unrot(page, r), color=None, fill=bg, overlay=True)
             self._touch(index)
             return self.blocks(index)
 
@@ -472,6 +533,7 @@ class Session:
                 return hits
             for i, page in enumerate(self.doc):
                 for r in page.search_for(term):
+                    r = _shown(page, r)
                     hits.append({"page": i, "bbox": [r.x0, r.y0, r.x1, r.y1], "kind": "text"})
                 for j, l in enumerate(self.ink.get(i, [])):
                     if term.lower() in l["text"].lower():
@@ -498,7 +560,7 @@ class Session:
                     continue
                 for bi, txt in targets:
                     count += txt.count(term)
-                    self.edit_block(i, list(d["blocks"][bi]["bbox"]), txt.replace(term, repl), checkpoint=False)
+                    self.edit_block(i, list(_shown(page, d["blocks"][bi]["bbox"])), txt.replace(term, repl), checkpoint=False)
                     touched.append(i)
             if not touched:
                 self.undo_stack.pop()
@@ -517,42 +579,71 @@ class Session:
         with self.lock:
             page = self.doc[index]
             lines = analyze_page(page, self.learning, lang, include_native)
-            for k in range(len(self.ink.get(index, []))):
-                self.hand.forget((index, k))
+            hand = self.hand(index)
+            hand.clear()                      # re-learn this page's writing from scratch
             self.ink[index] = lines
             for j, l in enumerate(lines):
-                self.hand.learn_line(page, l, (index, j))
-            return {"ink": self._ink_public(index), "hand": self.hand.summary()}
+                hand.learn_line(page, l, (index, j))
+            return {"ink": self._ink_public(index), "hand": hand.summary()}
+
+    # ------------------------------------------------------------------ calligraphy of a page
+    def hand(self, index):
+        """The handwriting of one page (created empty the first time)."""
+        if index not in self.hands:
+            self.hands[index] = HandwritingLibrary()
+        return self.hands[index]
+
+    def hand_info(self, index):
+        h = self.hand(index)
+        return {"hand": h.summary(), "height": h.typical_height(), "learning": self.learning.stats()}
+
+    def save_style(self, index, name):
+        name = (name or "").strip()
+        if not name:
+            raise RuntimeError("Scrivi un nome per la calligrafia.")
+        h = self.hand(index)
+        if not (h.glyphs or h.manual):
+            raise RuntimeError("Questa pagina non ha ancora lettere apprese: analizzala o segna le lettere prima.")
+        HW.save_style(h.to_style(name))
+        return HW.style_list()
+
+    def load_style(self, index, name):
+        h = self.hand(index)
+        if name:
+            h.load_style(HW.get_style(name))
+        else:
+            h.unload_style()
+        return self.hand_info(index)
 
     def set_ink_kind(self, index, line_id, kind):
         """The user says whether a line is handwritten ("hand") or printed ("print")."""
         with self.lock:
             line = self.ink[index][line_id]
             line["kind"] = "print" if kind == "print" else "hand"
-            self.hand.forget((index, line_id))
+            self.hand(index).forget((index, line_id))
             if line["kind"] == "hand":
                 line["doubt"] = min(line["doubt"], 0.4)
-                self.hand.learn_line(self.doc[index], line, (index, line_id))
-            return {"ink": self._ink_public(index), "hand": self.hand.summary()}
+                self.hand(index).learn_line(self.doc[index], line, (index, line_id))
+            return {"ink": self._ink_public(index), "hand": self.hand(index).summary()}
 
     def ink_letters(self, index, line_id):
         """Image of a handwritten line plus where each letter is, for marking letters one by one."""
         with self.lock:
             page = self.doc[index]
             line = self.ink[index][line_id]
-            clip = self.hand._line_clip(page, line["bbox"])
+            clip = self.hand(index)._line_clip(page, line["bbox"])
             zoom = 4
             pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip, alpha=False)
             return {"img": "data:image/png;base64," + base64.b64encode(pix.tobytes("png")).decode(),
                     "rect": [clip.x0, clip.y0, clip.x1, clip.y1], "line": line["bbox"], "text": line["text"],
-                    "segments": self.hand.propose_segments(page, line)}
+                    "segments": self.hand(index).propose_segments(page, line)}
 
     def teach_letters(self, index, line_id, segments, update_text=True):
         """Store the letters/digits the user marked and, optionally, use them as the line reading."""
         with self.lock:
             page = self.doc[index]
             line = self.ink[index][line_id]
-            stored = self.hand.learn_manual(page, line["bbox"], segments)
+            stored = self.hand(index).learn_manual(page, line["bbox"], segments)
             learned = 0
             marked = sorted((s for s in segments if s.get("char", "").strip()), key=lambda s: s["x0"])
             if update_text and marked:
@@ -562,7 +653,7 @@ class Session:
                     line["text"] = text
                 line["source"], line["doubt"], line["kind"] = "user", 0.0, "hand"
             return {"ink": self._ink_public(index), "stored": stored, "learned": learned,
-                    "hand": self.hand.summary(), "stats": self.learning.stats()}
+                    "hand": self.hand(index).summary(), "stats": self.learning.stats()}
 
     @staticmethod
     def _letters_text(line, marked):
@@ -601,8 +692,8 @@ class Session:
             line["source"] = "user"
             line["doubt"] = 0.0
             page = self.doc[index]
-            self.hand.learn_line(page, line, (index, line_id))
-            return {"ink": self._ink_public(index), "learned": learned, "hand": self.hand.summary(),
+            self.hand(index).learn_line(page, line, (index, line_id))
+            return {"ink": self._ink_public(index), "learned": learned, "hand": self.hand(index).summary(),
                     "stats": self.learning.stats()}
 
     def ink_crop(self, index, line_id):
@@ -613,14 +704,14 @@ class Session:
             pix = page.get_pixmap(matrix=fitz.Matrix(3, 3), clip=r, alpha=False)
             return "data:image/png;base64," + base64.b64encode(pix.tobytes("png")).decode()
 
-    def preview_hand(self, text, height=None, color=None):
+    def preview_hand(self, index, text, height=None, color=None):
         with self.lock:
-            h = height or self.hand.typical_height()
-            res = self.hand.render(text, h, _rgb(color) if color else None)
+            h = height or self.hand(index).typical_height()
+            res = self.hand(index).render(text, h, _rgb(color) if color else None)
             if not res:
                 return None
             return {"img": "data:image/png;base64," + base64.b64encode(res["png"]).decode(),
-                    "coverage": round(self.hand.coverage(text), 2)}
+                    "coverage": round(self.hand(index).coverage(text), 2)}
 
     def edit_ink(self, index, line_id, text, color=None):
         with self.lock:
@@ -634,7 +725,7 @@ class Session:
             if printed:
                 ink_color = _rgb(color) if color else self._dark_color(page, r)
             bg = self._background(page, cover)
-            page.draw_rect(cover, color=None, fill=bg, overlay=True)
+            page.draw_rect(_unrot(page, cover), color=None, fill=bg, overlay=True)
             if printed and text.strip():
                 # scanned print is rewritten as print, not with the handwriting
                 font, _ = F.system_font("Arial")
@@ -642,15 +733,15 @@ class Session:
                 width = font.text_length(text, fontsize=size)
                 tw = fitz.TextWriter(page.rect, color=ink_color)
                 tw.append((r.x0, r.y1 - h * 0.2), text, font=font, fontsize=size)
-                tw.write_text(page)
+                _write_upright(page, tw)
                 line["bbox"] = [r.x0, r.y0, r.x0 + max(width, 4), r.y1]
             elif text.strip():
-                ink_color = _rgb(color) if color else self.hand.ink_color()
-                res = self.hand.render(text, h, ink_color, max_width_pt=page.rect.x1 - 18 - r.x0)
+                ink_color = _rgb(color) if color else self.hand(index).ink_color()
+                res = self.hand(index).render(text, h, ink_color, max_width_pt=page.rect.x1 - 18 - r.x0)
                 if res:
                     top = r.y0 + res["top_offset_pt"]
                     rect = fitz.Rect(r.x0, top, r.x0 + res["width_pt"], top + res["height_pt"])
-                    page.insert_image(rect, stream=res["png"], overlay=True)
+                    _image_upright(page, rect, res["png"])
                     line["bbox"] = [r.x0, r.y0, max(r.x0 + res["width_pt"], r.x0 + 4), r.y1]
             line["text"] = text
             line["synthetic"] = True
@@ -662,14 +753,14 @@ class Session:
     def add_hand(self, index, x, y, text, height=None, color=None):
         with self.lock:
             page = self.doc[index]
-            h = float(height or self.hand.typical_height())
+            h = float(height or self.hand(index).typical_height())
             self._checkpoint()
-            res = self.hand.render(text, h, _rgb(color) if color else None, max_width_pt=page.rect.x1 - 18 - x)
+            res = self.hand(index).render(text, h, _rgb(color) if color else None, max_width_pt=page.rect.x1 - 18 - x)
             if not res:
                 return self.blocks(index)
             top = y + res["top_offset_pt"]
             rect = fitz.Rect(x, top, x + res["width_pt"], top + res["height_pt"])
-            page.insert_image(rect, stream=res["png"], overlay=True)
+            _image_upright(page, rect, res["png"])
             self.ink.setdefault(index, []).append({
                 "bbox": [x, y, x + res["width_pt"], y + h], "raw": text, "text": text, "words": [],
                 "source": "user", "doubt": 0.0, "synthetic": True, "kind": "hand"})
@@ -693,6 +784,7 @@ class Session:
             self._checkpoint()
             self.doc.delete_page(index)
             self.ink = {(k if k < index else k - 1): v for k, v in self.ink.items() if k != index}
+            self.hands = {(k if k < index else k - 1): v for k, v in self.hands.items() if k != index}
             self.page_versions = {i: self.page_versions.get(i, 0) + 1 for i in range(len(self.doc))}
             self._touch()
             return self.info()
@@ -703,6 +795,7 @@ class Session:
             ref = self.doc[min(index, len(self.doc) - 1)].rect
             self.doc.new_page(pno=index + 1, width=ref.width, height=ref.height)
             self.ink = {(k if k <= index else k + 1): v for k, v in self.ink.items()}
+            self.hands = {(k if k <= index else k + 1): v for k, v in self.hands.items()}
             self.page_versions = {i: self.page_versions.get(i, 0) + 1 for i in range(len(self.doc))}
             self._touch()
             return self.info()
