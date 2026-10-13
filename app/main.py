@@ -430,6 +430,14 @@ class Api:
         return self._s.set_line_style(index, line_id, sid)
 
     @safe
+    def merge_styles(self, index, src, dst):
+        return self._s.merge_styles(index, src, dst)
+
+    @safe
+    def split_style(self, index, sid):
+        return self._s.split_style(index, sid)
+
+    @safe
     def rename_style(self, index, sid, name):
         return self._s.rename_style(index, sid, name)
 

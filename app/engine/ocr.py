@@ -368,7 +368,10 @@ def _second_opinion(line, crop, zoom, reader, lexicon, prefer):
     if reader is not None:
         try:
             text, conf = reader.read(crop)
-            if text:
+            # as many letters as the ink is long: a reading of another length is the model
+            # making things up (it does that on smudges, ruled lines, drawings)
+            aspect = crop.shape[1] / max(crop.shape[0], 1)
+            if text and 0.6 <= len(text) / max(aspect, 0.5) <= 4.0:
                 options.append((text, "model", conf))
         except Exception:
             pass

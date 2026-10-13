@@ -1002,7 +1002,29 @@ function renderWritings(styles, selected) {
   }
   box.innerHTML = styles.map(st => `<button class="wchip${st.id === selected ? " active" : ""}" data-id="${st.id}" style="--c:${st.color}"
     title="${st.kind === "print" ? "Testo stampato" : "Scritto a mano"} · ${st.lines} righe · ${st.glyphs} caratteri"><i></i>${esc(st.name)}<small>${st.lines}</small></button>`).join("");
-  $$(".wchip", box).forEach(b => b.onclick = () => { S.style = +b.dataset.id; refreshHand(S.style); });
+  $$(".wchip", box).forEach(b => {
+    b.onclick = () => { S.style = +b.dataset.id; refreshHand(S.style); };
+    // drag a writing onto another: they are the same person
+    b.draggable = true;
+    b.ondragstart = e => { e.dataTransfer.setData("text/plain", b.dataset.id); b.classList.add("dragging"); };
+    b.ondragend = () => b.classList.remove("dragging");
+    b.ondragover = e => { e.preventDefault(); b.classList.add("drop"); };
+    b.ondragleave = () => b.classList.remove("drop");
+    b.ondrop = async e => {
+      e.preventDefault(); b.classList.remove("drop");
+      const src = +e.dataTransfer.getData("text/plain"), dst = +b.dataset.id;
+      if (!src || src === dst) return;
+      const a = styles.find(x => x.id === src), d = styles.find(x => x.id === dst);
+      const ok = await modal("Unire le scritture?", `Le righe di “${a.name}” passano a “${d.name}” e verranno riscritte con le sue lettere.`,
+        [["Annulla", false, "ghost"], ["Unisci", true, "primary"]]);
+      if (!ok) return;
+      await guarded(async () => {
+        const page = S.current;
+        applyInkResult(page, await call("merge_styles", page, src, dst));
+        toast(`“${a.name}” unita a “${d.name}”.`, "ok");
+      });
+    };
+  });
 }
 async function applyStyle(name) {
   await guarded(async () => {
@@ -1351,6 +1373,17 @@ const COMMANDS = {
       [["Annulla", false, "ghost"], ["Rinomina", true, "primary"]], $("#styleName").textContent);
     if (!name) return;
     await guarded(async () => applyInkResult(S.current, await call("rename_style", S.current, S.style, name)));
+  },
+  splitStyle: async () => {
+    if (S.style == null) return;
+    const ok = await modal("Dividere la scrittura?", `Le righe di “${$("#styleName").textContent}” vengono separate in due scritture, secondo inchiostro, tratto, inclinazione e dimensione.`,
+      [["Annulla", false, "ghost"], ["Dividi", true, "primary"]]);
+    if (!ok) return;
+    await guarded(async () => {
+      const r = await call("split_style", S.current, S.style);
+      applyInkResult(S.current, r);
+      toast("Scrittura divisa in due: controlla le righe e spostale se serve.", "ok");
+    });
   },
   styleMenu: async () => {
     const menu = $("#styleMenu");

@@ -882,6 +882,68 @@ class Session:
             pw.drop_empty({l.get("style") for l in self.ink.get(index, [])})
             return self._result(index, new.sid)
 
+    def merge_styles(self, index, src, dst):
+        """Two writings are the same person (or typeface): all lines of src go to dst."""
+        with self.lock:
+            pw = self.writings(index)
+            a, b = pw.get(int(src)), pw.get(int(dst))
+            if a is None or b is None or a is b:
+                raise RuntimeError("Scrittura non trovata.")
+            for j, l in enumerate(self.ink.get(index, [])):
+                if l.get("style") == a.sid:
+                    l["style"], l["kind"] = b.sid, b.kind
+                    b.take_manual(a, j)
+            for ch, gs in a.manual.items():          # letters marked on no line in particular
+                b.manual.setdefault(ch, []).extend(gs)
+            a.manual = {}
+            if not b.loaded and a.loaded:
+                b.loaded, b.loaded_name = a.loaded, a.loaded_name
+            a.loaded = {}
+            del pw.libs[a.sid]
+            pw._names()
+            self._relearn(index, {b.sid})
+            return self._result(index, b.sid)
+
+    def split_style(self, index, sid):
+        """A writing that mixes two people: its lines are divided in two by how they are
+        written (ink, stroke, slant, size), the two most different lines leading each part."""
+        with self.lock:
+            pw = self.writings(index)
+            lib = pw.get(int(sid))
+            members = [(j, l) for j, l in enumerate(self.ink.get(index, [])) if l.get("style") == lib.sid]
+            measured = [(j, l) for j, l in members if l.get("feat")]
+            if len(measured) < 2:
+                raise RuntimeError("Servono almeno due righe lette per dividere una scrittura.")
+            best, pair = -1.0, None
+            for x in range(len(measured)):
+                for y in range(x + 1, len(measured)):
+                    d = WR.distance(measured[x][1]["feat"], measured[y][1]["feat"])
+                    if d > best:
+                        best, pair = d, (measured[x][1]["feat"], measured[y][1]["feat"])
+            # a few rounds of 2-means on the writer distance
+            cents = list(pair)
+            for _ in range(4):
+                side = {j: int(WR.distance(l["feat"], cents[1]) < WR.distance(l["feat"], cents[0]))
+                        for j, l in measured}
+                parts = [[l["feat"] for j, l in measured if side[j] == k] for k in (0, 1)]
+                if not all(parts):
+                    break
+                cents = [WR._mean(p) for p in parts]
+            if not all(parts):
+                raise RuntimeError("Le righe di questa scrittura sembrano tutte uguali.")
+            new = pw.get(pw.new(lib.kind, cents[1]))
+            lib.feat = cents[0]
+            for j, l in members:
+                k = side.get(j)
+                if k is None:                       # a line written by the user: nearest line
+                    near = min(measured, key=lambda m: abs(m[1]["bbox"][1] - l["bbox"][1]))
+                    k = side[near[0]]
+                if k == 1:
+                    l["style"] = new.sid
+                    new.take_manual(lib, j)
+            self._relearn(index, {lib.sid, new.sid})
+            return self._result(index, new.sid)
+
     def ink_letters(self, index, line_id):
         """Image of a line plus where each letter is, for marking letters one by one."""
         with self.lock:

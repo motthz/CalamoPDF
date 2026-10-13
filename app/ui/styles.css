@@ -516,3 +516,6 @@ kbd { font: 600 10px/1 var(--font); padding: 3px 5px; border-radius: 4px; backgr
 .st-cancel { border: 1px solid var(--line-2); background: transparent; color: var(--text-2); border-radius: 5px; font-size: 11px; padding: 1px 7px; cursor: pointer; }
 .st-cancel:hover { color: var(--text); border-color: var(--gold); }
 .model-bar { width: 100%; }
+.wchip.dragging { opacity: .5; }
+.wchip.drop { border-style: dashed; border-color: var(--gold); }
+.writings-hint { margin: -4px 0 6px; }

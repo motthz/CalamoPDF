@@ -56,3 +56,6 @@ out = []
 th = threading.Thread(target=lambda: out.append(R.read(np.asarray(line(t)))))
 th.start(); th.join()
 print("E in another thread:", out)
+for fg, bg in [((25, 40, 140), (247, 246, 241)), ((170, 25, 25), (247, 246, 241)), ((90, 90, 90), (230, 225, 210)), ((20, 20, 20), (255, 255, 255))]:
+    for t2 in ("Firmato Giulia Rossi", "Consegna entro venerdi"):
+        print("cleaned", fg, bg, R.read(np.asarray(line(t2, bg, fg))))

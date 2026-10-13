@@ -156,9 +156,24 @@ class HandReader:
             self._std = np.array(pc.get("image_std", [0.5, 0.5, 0.5]), np.float32)
             self._dec_inputs = {i.name: i for i in self._dec.get_inputs()}
 
+    @staticmethod
+    def clean(rgb):
+        """The model was trained on dark ink on white paper: whatever the pen colour and the
+        paper tone, the line becomes black ink on white, with full contrast."""
+        a = rgb[:, :, :3].astype(np.float32)
+        gray = a.min(axis=2) * 0.5 + a.mean(axis=2) * 0.5      # coloured ink counts as dark
+        paper = float(np.percentile(gray, 90))
+        ink = float(np.percentile(gray, 1))
+        if paper - ink < 20:
+            return np.full(a.shape[:2] + (3,), 255, np.uint8)
+        x = np.clip((gray - ink) / (paper - ink), 0, 1)
+        x = np.where(x > 0.85, 1.0, x)                           # paper grain and shading go white
+        g = (x * 255).astype(np.uint8)
+        return np.repeat(g[:, :, None], 3, axis=2)
+
     def _pixels(self, rgb):
         from PIL import Image
-        img = Image.fromarray(np.ascontiguousarray(rgb[:, :, :3])).convert("RGB")
+        img = Image.fromarray(self.clean(rgb))
         img = img.resize((self._size[1], self._size[0]), Image.BILINEAR)
         x = (np.asarray(img, np.float32) / 255.0 - self._mean) / self._std
         return x.transpose(2, 0, 1)[None]

@@ -201,10 +201,12 @@
         </div>
 
         <div class="section-title">Scritture di questa pagina <span class="muted" id="handPageLabel"></span></div>
+        <p class="muted small writings-hint">Trascina una scrittura su un'altra se sono la stessa persona.</p>
         <div class="writings" id="writingList"><div class="empty small">Analizza la pagina: Calamo separa le scritture di persone diverse e lo stampato.</div></div>
         <div class="card">
           <div class="style-head"><b id="styleName">—</b><span class="kind-tag" id="styleKind"></span>
-            <button class="icon-btn" data-cmd="renameStyle" data-need-doc title="Rinomina (es. chi ha scritto)"><svg><use href="#i-edit"/></svg></button></div>
+            <button class="icon-btn" data-cmd="renameStyle" data-need-doc title="Rinomina (es. chi ha scritto)"><svg><use href="#i-edit"/></svg></button>
+            <button class="icon-btn" data-cmd="splitStyle" data-need-doc title="Dividi in due: questa scrittura mescola due persone"><svg><use href="#i-split"/></svg></button></div>
           <div class="hand-meta"><span class="ink-swatch" id="inkSwatch"></span><span id="handMeta" class="muted small">Nessuna lettera appresa</span></div>
           <div class="glyphs" id="glyphs"></div>
           <p class="muted small glyph-hint">Ogni scrittura (persona o carattere stampato) ha le sue lettere: una riga viene sempre riscritta con le lettere della sua scrittura. Clicca una lettera per vederne gli esempi ed eliminare quelli sbagliati.</p>
