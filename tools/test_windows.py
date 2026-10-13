@@ -77,20 +77,21 @@ def test_rotated_page_edit():
             check(f"rotation {rot}: handwriting found", False)
             continue
         line = fitz.Rect(ink[0]["bbox"])
-        check(f"rotation {rot}: line found where it is shown", (line & target).get_area() > target.get_area() * 0.5,
+        check(f"rotation {rot}: line found where it is shown", target.contains((line.tl + line.br) / 2),
               str([round(v) for v in line]))
-        before = s.render(0, 1)
         s.edit_ink(0, 0, "Anna")
         page = s.doc[0]
-        imgs = [fitz.Rect(i["bbox"]) * _view_matrix(page) for i in page.get_image_info()]
-        new = [r for r in imgs if r.width < target.width * 0.8]
-        check(f"rotation {rot}: new writing placed on the old line",
-              bool(new) and abs(new[-1].x0 - line.x0) < 3 and abs(new[-1].y0 - line.y0) < line.height,
-              str([[round(v) for v in r] for r in new]))
-        pix = page.get_pixmap(clip=fitz.Rect(line.x0 + line.width * 0.6, line.y0, line.x1, line.y1))
-        a = np.frombuffer(pix.samples, np.uint8).reshape(pix.h, pix.w, pix.n)[:, :, :3].mean(axis=2)
-        check(f"rotation {rot}: old writing covered", (a < 140).mean() < 0.01, f"{(a < 140).mean():.3f}")
-        check(f"rotation {rot}: page changed", s.render(0, 1) != before)
+
+        def ink_share(rect):    # dark pixels in a displayed area, as the user sees the page
+            pix = page.get_pixmap(clip=rect, dpi=144)
+            a = np.frombuffer(pix.samples, np.uint8).reshape(pix.h, pix.w, pix.n)[:, :, :3].mean(axis=2)
+            return float((a < 140).mean())
+        start = fitz.Rect(line.x0, line.y0 - 4, line.x0 + line.width * 0.4, line.y1 + 4)
+        tail = fitz.Rect(line.x0 + line.width * 0.6, line.y0, line.x1, line.y1)
+        elsewhere = fitz.Rect(page.rect.x0, line.y1 + line.height * 2, page.rect.x1, page.rect.y1)
+        check(f"rotation {rot}: new writing on the old line", ink_share(start) > 0.02, f"{ink_share(start):.3f}")
+        check(f"rotation {rot}: old writing covered", ink_share(tail) < 0.01, f"{ink_share(tail):.3f}")
+        check(f"rotation {rot}: nothing written elsewhere", ink_share(elsewhere) < 0.001, f"{ink_share(elsewhere):.4f}")
 
 
 def _sha(p):
