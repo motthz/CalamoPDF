@@ -234,7 +234,10 @@ LETTER_LOOKALIKE = {"0": "o", "1": "I", "5": "s", "8": "B", "6": "b", "9": "g"}
 
 
 def fix_letters(word):
-    """'Firmat0' -> 'Firmato', 'c1ao' -> 'clao': a single stray digit inside a word made of letters."""
+    """'Firmat0' -> 'Firmato', 'da+i' -> 'dati': stray digits or '+' inside a word made of letters."""
+    letters, digits = sum(c.isalpha() for c in word), sum(c.isdigit() for c in word)
+    if "+" in word and letters >= 2 and letters > digits:
+        word = word.replace("+", "t")           # a handwritten "t" is often read as "+"
     m = _WORD_RE.match(word)
     pre, core, post = m.group(1), m.group(2), m.group(3)
     digits = [i for i, c in enumerate(core) if c.isdigit()]
@@ -263,9 +266,11 @@ def _doubt(text):
     if not text:
         return 1.0
     score = 0.0
-    odd = sum(1 for c in text if not (c.isalnum() or c.isspace() or c in ".,;:'\"!?-()€%/+=*#°<>[]&àèéìòùÀÈÉÌÒÙ"))
-    score += min(odd / max(len(text), 1) * 4, 0.6)
     toks = text.split()
+    # symbols are odd in words (a "+" is often a misread "t"), normal in numbers (+39, 3*4)
+    odd = sum(1 for t in toks for c in t
+              if not (c.isalnum() or c in ".,;:'\"!?-()€%/°àèéìòùÀÈÉÌÒÙ" or (_is_number(t) or len(t) == 1) and c in "+=*#<>"))
+    score += min(odd / max(len(text), 1) * 4, 0.6)
     mixed = sum(1 for t in toks if not _is_number(t) and any(c.isdigit() for c in t) and any(c.isalpha() for c in t))
     score += 0.25 * mixed
     if len(text.strip()) <= 2 and not all(_is_number(t) for t in toks):

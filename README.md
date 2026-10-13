@@ -31,7 +31,7 @@
 ## Installazione
 
 1. Scarica **`CalamoPDF-Setup-<versione>.exe`** dalla pagina [Releases](../../releases/latest) e avvialo.
-2. In alternativa usa la versione portabile: **`CalamoPDF.exe`** (anche nella cartella principale di questo repository) — non richiede installazione.
+2. In alternativa usa la versione portabile: **`CalamoPDF.exe`**, sempre dalla pagina [Releases](../../releases/latest) — non richiede installazione.
 
 > Windows potrebbe mostrare l'avviso SmartScreen perché l'eseguibile non è firmato: *Ulteriori informazioni → Esegui comunque*.
 
