@@ -74,46 +74,74 @@ def _data_url(alpha):
     return "data:image/png;base64," + base64.b64encode(_png(255 - alpha)).decode()
 
 
-MANUAL_FILE = "calligrafia.json"
+STYLES_FILE = "calligrafie.json"      # calligraphies the user chose to save, by name
+OLD_MANUAL_FILE = "calligrafia.json"  # 1.1.0 kept every marked letter for all documents
 MANUAL_PER_CHAR = 24
 
 
+def _glyph_to_json(ch, g):
+    return {"char": ch, "png": base64.b64encode(_png(g.alpha)).decode("ascii"), "top": float(g.top),
+            "bottom": float(g.bottom), "width": float(g.width), "jl": bool(g.join_left), "jr": bool(g.join_right)}
+
+
+def _glyph_from_json(item, src):
+    img = Image.open(io.BytesIO(base64.b64decode(item["png"])))
+    return Glyph(np.array(img.convert("L")), item["top"], item["bottom"], item["width"],
+                 item["jl"], item["jr"], src, 1.0, src == "manual")
+
+
 class HandwritingLibrary:
+    """The handwriting of ONE page: different pages and documents may be written by
+    different people, so nothing is shared unless the user loads a saved calligraphy."""
+
     def __init__(self):
-        self.glyphs = {}      # char -> [Glyph] learned automatically from the open document
-        self.manual = {}      # char -> [Glyph] marked by the user, persistent
+        self.glyphs = {}      # char -> [Glyph] learned automatically from this page
+        self.manual = {}      # char -> [Glyph] marked by the user on this page
+        self.loaded = {}      # char -> [Glyph] from a saved calligraphy the user chose
+        self.loaded_name = None
         self.inks = []        # observed ink colours
         self.heights = []     # observed line heights (pt)
         self.words_seen = 0
-        self._load_manual()
-
-    # ------------------------------------------------------------------ persistence of manual glyphs
-    def _load_manual(self):
-        for item in load_json(MANUAL_FILE, {"glyphs": []}).get("glyphs", []):
-            try:
-                img = Image.open(io.BytesIO(base64.b64decode(item["png"])))
-                g = Glyph(np.array(img.convert("L")), item["top"], item["bottom"], item["width"],
-                          item["jl"], item["jr"], "manual", 1.0, True)
-                self.manual.setdefault(item["char"], []).append(g)
-            except Exception:
-                continue
-
-    def _save_manual(self):
-        out = [{"char": ch, "png": base64.b64encode(_png(g.alpha)).decode("ascii"), "top": g.top,
-                "bottom": g.bottom, "width": g.width, "jl": g.join_left, "jr": g.join_right}
-               for ch, gs in self.manual.items() for g in gs]
-        save_json(MANUAL_FILE, {"glyphs": out})
 
     def _variants(self, ch):
-        """Glyphs to draw a character with: the user's own markings come first."""
-        return self.manual.get(ch) or self.glyphs.get(ch)
+        """Glyphs to draw a character with: the user's markings, then this page, then a loaded style."""
+        return self.manual.get(ch) or self.glyphs.get(ch) or self.loaded.get(ch)
 
     def _known(self, ch):
-        return ch in self.manual or ch in self.glyphs
+        return ch in self.manual or ch in self.glyphs or ch in self.loaded
+
+    def empty(self):
+        return not (self.glyphs or self.manual or self.loaded)
+
+    # ------------------------------------------------------------------ saving / loading by name
+    def to_style(self, name):
+        """Everything this page knows, as a saved calligraphy."""
+        chars = set(self.glyphs) | set(self.manual) | set(self.loaded)
+        out = []
+        for ch in chars:
+            for g in (self.manual.get(ch, []) + self.glyphs.get(ch, []) + self.loaded.get(ch, []))[:MANUAL_PER_CHAR]:
+                out.append(_glyph_to_json(ch, g))
+        return {"name": name, "glyphs": out, "ink": [float(v) for v in self.ink_color()],
+                "height": float(self.typical_height()) if self.heights else None}
+
+    def load_style(self, style):
+        """Use a saved calligraphy on this page, for the letters the page itself lacks."""
+        self.loaded = {}
+        for item in style.get("glyphs", []):
+            try:
+                self.loaded.setdefault(item["char"], []).append(_glyph_from_json(item, "loaded"))
+            except Exception:
+                continue
+        self.loaded_name = style.get("name")
+        self.loaded_ink = style.get("ink")
+        self.loaded_height = style.get("height")
+
+    def unload_style(self):
+        self.loaded, self.loaded_name = {}, None
 
     # ------------------------------------------------------------------ learning
     def clear(self):
-        """Forget what was learned from the current document (manual marks stay)."""
+        """Forget what was learned automatically from the page (marked letters stay)."""
         self.glyphs, self.inks, self.heights, self.words_seen = {}, [], [], 0
 
     def forget(self, src):
@@ -324,49 +352,51 @@ class HandwritingLibrary:
             dark = rgb[ink]
             lum = dark.mean(axis=1)
             self.inks.append(dark[lum <= np.percentile(lum, 35)].mean(axis=0).tolist())
-            self._save_manual()
         return stored
 
     def variants(self, ch):
         """Every sample of a character, for the review panel."""
-        out = [{"kind": "manual", "i": i, "img": _data_url(g.alpha)} for i, g in enumerate(self.manual.get(ch, []))]
-        out += [{"kind": "auto", "i": i, "img": _data_url(g.alpha)} for i, g in enumerate(self.glyphs.get(ch, []))]
+        out = []
+        for kind, store in (("manual", self.manual), ("auto", self.glyphs), ("loaded", self.loaded)):
+            out += [{"kind": kind, "i": i, "img": _data_url(g.alpha)} for i, g in enumerate(store.get(ch, []))]
         return out
 
     def delete_variant(self, ch, kind, i):
-        store = self.manual if kind == "manual" else self.glyphs
+        store = {"manual": self.manual, "auto": self.glyphs, "loaded": self.loaded}[kind]
         bucket = store.get(ch, [])
         if 0 <= i < len(bucket):
             del bucket[i]
         if not bucket:
             store.pop(ch, None)
-        if kind == "manual":
-            self._save_manual()
 
     def forget_manual(self):
         self.manual = {}
-        self._save_manual()
 
     # ------------------------------------------------------------------ info
     def ink_color(self):
         if not self.inks:
+            if self.loaded and getattr(self, "loaded_ink", None):
+                return tuple(self.loaded_ink)
             return (0.12, 0.16, 0.35)
         c = np.median(np.array(self.inks), axis=0) / 255.0
         return tuple(float(v) for v in c)
 
     def typical_height(self):
-        return float(np.median(self.heights)) if self.heights else 14.0
+        if self.heights:
+            return float(np.median(self.heights))
+        return float(getattr(self, "loaded_height", None) or 14.0) if self.loaded else 14.0
 
     def summary(self):
-        chars = sorted(set(self.glyphs) | set(self.manual),
+        chars = sorted(set(self.glyphs) | set(self.manual) | set(self.loaded),
                        key=lambda c: (0 if c.isalpha() else 1 if c.isdigit() else 2, c.lower(), c))
         out = []
         for c in chars:
-            manual = self.manual.get(c, [])
-            g = (manual or self.glyphs[c])[0]
-            out.append({"char": c, "count": len(manual) + len(self.glyphs.get(c, [])), "manual": len(manual),
-                        "img": _data_url(g.alpha)})
+            manual, own, loaded = self.manual.get(c, []), self.glyphs.get(c, []), self.loaded.get(c, [])
+            g = (manual or own or loaded)[0]
+            out.append({"char": c, "count": len(manual) + len(own) + len(loaded), "manual": len(manual),
+                        "loaded": not (manual or own), "img": _data_url(g.alpha)})
         return {"glyphs": out, "words": self.words_seen, "manual": sum(len(v) for v in self.manual.values()),
+                "loadedName": self.loaded_name,
                 "ink": "#%02x%02x%02x" % tuple(int(v * 255) for v in self.ink_color())}
 
     # ------------------------------------------------------------------ synthesis
@@ -411,7 +441,7 @@ class HandwritingLibrary:
         placed, x = [], 0.0
         last = {}
         space = None
-        widths = [g.width for store in (self.glyphs, self.manual) for v in store.values() for g in v]
+        widths = [g.width for store in (self.glyphs, self.manual, self.loaded) for v in store.values() for g in v]
         space = (np.median(widths) * 0.75 if widths else 0.38) * Hpx
         prev_join = False
         for ch in text:
@@ -488,3 +518,37 @@ class HandwritingLibrary:
             res["height_pt"] *= f
             res["top_offset_pt"] *= f
         return res
+
+
+# --------------------------------------------------------------------------- saved calligraphies
+def saved_styles():
+    data = load_json(STYLES_FILE, None)
+    if data is None:
+        data = {"styles": []}
+        # the letters 1.1.0 kept for every document become a saved calligraphy the user can pick
+        old = load_json(OLD_MANUAL_FILE, {}).get("glyphs")
+        if old:
+            data["styles"].append({"name": "Lettere segnate (versione 1.1)", "glyphs": old, "ink": None, "height": None})
+        save_json(STYLES_FILE, data)
+    return data["styles"]
+
+
+def style_list():
+    return [{"name": st["name"], "chars": len({g["char"] for g in st.get("glyphs", [])})} for st in saved_styles()]
+
+
+def save_style(style):
+    styles = [st for st in saved_styles() if st["name"] != style["name"]]
+    styles.append(style)
+    save_json(STYLES_FILE, {"styles": styles})
+
+
+def get_style(name):
+    for st in saved_styles():
+        if st["name"] == name:
+            return st
+    raise RuntimeError(f"Calligrafia “{name}” non trovata.")
+
+
+def delete_style(name):
+    save_json(STYLES_FILE, {"styles": [st for st in saved_styles() if st["name"] != name]})

@@ -199,12 +199,20 @@
           <div class="empty">Nessuna analisi per questa pagina.<br>Premi <b>Analizza pagina</b> per leggere la scrittura a mano.</div>
         </div>
 
-        <div class="section-title">La tua calligrafia</div>
+        <div class="section-title">Calligrafia di questa pagina <span class="muted" id="handPageLabel"></span></div>
         <div class="card">
           <div class="hand-meta"><span class="ink-swatch" id="inkSwatch"></span><span id="handMeta" class="muted small">Nessuna lettera appresa</span></div>
           <div class="glyphs" id="glyphs"></div>
+          <p class="muted small glyph-hint">Ogni pagina ha la sua calligrafia: può averla scritta una persona diversa. Clicca una lettera per vederne gli esempi ed eliminare quelli sbagliati.</p>
+          <div class="style-row" id="styleLoaded" hidden></div>
+          <div class="row gap wrap style-actions">
+            <button class="btn ghost sm" data-cmd="saveStyle" data-need-doc title="Ricorda questa calligrafia con un nome, per usarla su altre pagine o documenti"><svg><use href="#i-save"/></svg>Ricorda…</button>
+            <div class="menu-wrap">
+              <button class="btn ghost sm" data-cmd="styleMenu" data-need-doc title="Usa su questa pagina una calligrafia ricordata"><svg><use href="#i-pen"/></svg>Usa una ricordata</button>
+              <div class="menu style-menu" id="styleMenu" hidden></div>
+            </div>
+          </div>
           <div class="learn-meta muted small" id="learnMeta"></div>
-          <p class="muted small glyph-hint">Clicca una lettera per vederne gli esempi ed eliminare quelli sbagliati.</p>
         </div>
       </div>
 
@@ -259,11 +267,12 @@
         <div class="section-title">Memoria di apprendimento</div>
         <div class="card">
           <p class="muted small" id="learnStats"></p>
-          <p class="muted small" id="lettersStats"></p>
-          <div class="row gap wrap">
-            <button class="btn ghost sm danger-text" data-cmd="resetLearning">Dimentica le correzioni</button>
-            <button class="btn ghost sm danger-text" data-cmd="forgetLetters">Dimentica le lettere segnate</button>
-          </div>
+          <button class="btn ghost sm danger-text" data-cmd="resetLearning">Dimentica le correzioni</button>
+        </div>
+        <div class="section-title">Calligrafie ricordate</div>
+        <div class="card">
+          <p class="muted small">La calligrafia resta legata alla sua pagina. Quelle che decidi di ricordare compaiono qui e si possono usare su qualsiasi pagina.</p>
+          <div class="style-list" id="styleList"></div>
         </div>
         <div class="section-title">Guida</div>
         <div class="card">
@@ -331,7 +340,7 @@
 <div class="modal-back" id="lettersModal" hidden>
   <div class="modal letters-modal">
     <div class="pop-head"><svg><use href="#i-letters"/></svg><b>Segna lettere e numeri</b><button class="icon-btn" data-cmd="lettersClose"><svg><use href="#i-x"/></svg></button></div>
-    <p class="muted small">Ogni riquadro è una lettera o un numero. Clicca un riquadro e digita il carattere (passa da solo al successivo).
+    <p class="muted small">Ogni riquadro è una lettera o un numero di questa pagina. Clicca un riquadro e digita il carattere (passa da solo al successivo).
       Trascina i bordi per spostarli, trascina su uno spazio vuoto per aggiungere un riquadro, <kbd>Canc</kbd> per eliminarlo.</p>
     <div class="letters-stage" id="lettersStage">
       <div class="letters-canvas" id="lettersCanvas"><img id="lettersImg" alt="" draggable="false"><div class="letters-boxes" id="lettersBoxes"></div></div>
@@ -360,7 +369,7 @@
 <div class="modal-back" id="glyphModal" hidden>
   <div class="modal glyph-modal">
     <div class="pop-head"><b id="glyphTitle"></b><button class="icon-btn" data-cmd="glyphClose"><svg><use href="#i-x"/></svg></button></div>
-    <p class="muted small">Gli esempi segnati da te (bordo dorato) hanno la precedenza e restano anche negli altri documenti. Elimina quelli sbagliati.</p>
+    <p class="muted small">Gli esempi segnati da te (bordo dorato) hanno la precedenza; quelli tratteggiati vengono da una calligrafia ricordata. Elimina quelli sbagliati.</p>
     <div class="glyph-variants" id="glyphVariants"></div>
   </div>
 </div>
@@ -390,6 +399,7 @@
   <div class="modal">
     <h3 id="modalTitle"></h3>
     <p id="modalText"></p>
+    <input id="modalInput" class="modal-input" hidden spellcheck="false" autocomplete="off">
     <div class="modal-actions" id="modalActions"></div>
   </div>
 </div>

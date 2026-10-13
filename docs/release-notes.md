@@ -1,17 +1,14 @@
-## Novità di Calamo PDF Studio 1.1.0
+## Novità di Calamo PDF Studio 1.2.0
 
-- **Segna lettere e numeri**: clicca una riga scritta a mano → *Segna lettere*. Ogni riquadro è un carattere: digita la lettera o il numero, sposta i bordi, dividi o unisci i riquadri. I caratteri segnati hanno la precedenza e restano anche negli altri documenti, così la calligrafia diventa sempre più completa.
-- **Esempi delle lettere**: nel pannello *La tua calligrafia* clicca una lettera per vederne gli esempi ed eliminare quelli sbagliati.
-- **Stampato o scritto a mano**: il testo stampato delle scansioni viene riconosciuto (in grigio) e non viene più usato per la calligrafia. Se serve, si cambia con il selettore *A mano / Stampato*.
-- **Numeri**: le cifre lette come lettere vengono corrette (`2O24` → `2024`, `l5` → `15`) e anche le righe fatte solo di numeri insegnano le cifre; corrette anche le cifre isolate dentro le parole (`Firmat0` → `Firmato`) e le `t` scritte a mano lette come `+` (`da+i` → `dati`).
-- **Tutorial** al primo avvio (rivedibile da *Impostazioni → Guida*).
-- **Aggiornamenti automatici**: da questa versione Calamo scarica da solo le nuove versioni pubblicate qui e le installa alla chiusura.
-- **Excel**: i numeri all'italiana come `120.400` vengono esportati correttamente (120400).
-- Rimossa la lettura con Claude e la chiave API: tutto funziona offline con l'OCR di Windows.
+- **Corretta la modifica della scrittura a mano**: sulle pagine ruotate (tipiche delle scansioni fatte col telefono) la nuova scritta veniva creata in un altro punto della pagina e quella originale restava visibile. Ora viene sostituita esattamente sul posto, con qualsiasi rotazione e margine della pagina. Lo stesso vale per testo, gomma e "A mano".
+- **Strumento A mano**: cliccando una scritta esistente la si riscrive, invece di crearne una nuova sopra.
+- **Una calligrafia per pagina**: pagine e documenti diversi possono essere scritti da persone diverse, quindi la calligrafia non viene più memorizzata tra le pagine né tra i documenti. Ogni pagina usa solo le proprie lettere.
+- **Ricorda una calligrafia a piacimento**: nel pannello *Calligrafia di questa pagina*, *Ricorda…* la salva con un nome (es. chi ha scritto) e *Usa una ricordata* la applica a un'altra pagina o a un altro documento, solo per le lettere che mancano. Le calligrafie ricordate si gestiscono in *Impostazioni*.
+- Il testo digitale delle pagine ruotate ora si può selezionare e modificare.
+- Le lettere segnate con la versione 1.1 restano disponibili come calligrafia ricordata "Lettere segnate (versione 1.1)".
 
 ### Download
-- **CalamoPDF-Setup-1.1.0.exe** — installer per Windows.
-- **CalamoPDF.exe** — versione portabile, nessuna installazione.
+- **CalamoPDF-Setup-1.2.0.exe** — installer per Windows.
+- **CalamoPDF.exe** — versione portabile.
 
-> Chi usa la 1.0.0 deve installare questa versione a mano una volta; dalle successive l'aggiornamento è automatico.
-> L'eseguibile non è firmato: se compare SmartScreen scegli *Ulteriori informazioni → Esegui comunque*.
+Chi ha già la 1.1.0 riceve questa versione in automatico.
