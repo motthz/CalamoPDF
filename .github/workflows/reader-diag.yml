@@ -1,0 +1,24 @@
+# Temporary: diagnostics of the handwriting reader.
+name: Reader diagnostics
+on:
+  push:
+    branches: ["claude/**"]
+    paths: ["tools/diag_reader.py", "app/engine/handreader.py"]
+  workflow_dispatch:
+jobs:
+  diag:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install numpy pillow onnxruntime tokenizers pymupdf transformers torch --extra-index-url https://download.pytorch.org/whl/cpu
+      - run: python -c "from app.engine.handreader import READER; READER.download()"
+        env:
+          CALAMO_MODEL_DIR: ${{ runner.temp }}/m
+          CALAMO_DATA: ${{ runner.temp }}/d
+      - run: python tools/diag_reader.py
+        env:
+          CALAMO_MODEL_DIR: ${{ runner.temp }}/m
+          CALAMO_DATA: ${{ runner.temp }}/d

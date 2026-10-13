@@ -223,6 +223,7 @@ input, select, textarea { font: inherit; color: var(--text); }
 .ink.flash, .blk.flash { animation: flash 1.2s var(--ease); }
 .hit { position: absolute; background: rgba(255, 200, 60, .35); border-radius: 2px; pointer-events: none; mix-blend-mode: multiply; }
 .hit.current { background: rgba(255, 150, 20, .55); box-shadow: 0 0 0 2px rgba(255,150,20,.8); }
+.hit.fuzzy { background: rgba(255, 200, 60, .18); outline: 1.5px dashed rgba(220, 150, 20, .9); }
 .sel-rect { position: absolute; border: 1.5px dashed var(--danger); background: rgba(240, 113, 103, .12); pointer-events: none; }
 
 /* in-place editor */

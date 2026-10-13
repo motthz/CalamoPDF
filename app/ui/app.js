@@ -324,7 +324,7 @@ function drawOverlay(P) {
   S.hits.forEach((h, k) => {
     if (h.page !== P.i) return;
     const d = document.createElement("div");
-    d.className = "hit" + (k === S.hitIdx ? " current" : "");
+    d.className = "hit" + (k === S.hitIdx ? " current" : "") + (h.fuzzy ? " fuzzy" : "");
     Object.assign(d.style, box(h.bbox, s, 1));
     frag.appendChild(d);
   });
@@ -1270,7 +1270,8 @@ const runSearch = debounce(async () => {
 function goToHit() {
   const h = S.hits[S.hitIdx];
   if (!h) return;
-  $("#findCount").textContent = `${S.hitIdx + 1} di ${S.hits.length}`;
+  $("#findCount").textContent = `${S.hitIdx + 1} di ${S.hits.length}${h.fuzzy ? " · simile" : ""}`;
+  $("#findCount").title = h.fuzzy ? "Parola scritta a mano quasi uguale a quella cercata (la lettura può contenere errori)" : "";
   S.pages.forEach(drawOverlay);
   goToPage(h.page, h.bbox[1]);
 }

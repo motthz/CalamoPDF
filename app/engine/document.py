@@ -2,6 +2,7 @@
 editing, undo/redo and saving."""
 import base64
 import copy
+import io
 import difflib
 import os
 import threading
@@ -103,6 +104,45 @@ def _write_hidden(page, tw):
 
 def _image_upright(page, rect, png):
     page.insert_image(_unrot(page, rect), stream=png, overlay=True, rotate=page.rotation)
+
+
+def _norm(t):
+    return "".join(c for c in t.lower() if c.isalnum() or c == " ").strip()
+
+
+def _find_in_line(line, term):
+    """Where a term appears in a read line: exact matches, and - since handwriting readings
+    contain mistakes - words that are almost the same ("Rassi" finds "Rossi").
+    Returns [(bbox, fuzzy)] with the box of the matching words."""
+    words = [w for w in line.get("words") or [] if w.get("text")]
+    toks = line["text"].split()
+    if [w["text"] for w in words] != toks:
+        # the text was corrected: spread its words over the line by their length
+        x0, y0, x1, y1 = line["bbox"]
+        total, pos, words = max(len(line["text"]), 1), 0, []
+        for t in toks:
+            a = line["text"].index(t, pos)
+            pos = a + len(t)
+            words.append({"text": t, "bbox": [x0 + (x1 - x0) * a / total, y0, x0 + (x1 - x0) * pos / total, y1]})
+    q = _norm(term)
+    if not q:
+        return []
+    n = max(1, len(q.split()))
+    out = []
+    for k in range(len(words)):
+        span = words[k:k + n]
+        if len(span) < n and k:
+            break
+        text = _norm(" ".join(w["text"] for w in span))
+        bbox = [min(w["bbox"][0] for w in span), min(w["bbox"][1] for w in span),
+                max(w["bbox"][2] for w in span), max(w["bbox"][3] for w in span)]
+        if q in text:
+            out.append((bbox, False))
+        elif len(q) >= 4 and abs(len(text) - len(q)) <= max(2, len(q) // 3):
+            # OCR look-alikes cost less (see Lexicon.distance)
+            if LEXICON.distance(text, q) <= max(1.0, len(q) * 0.25):
+                out.append((bbox, True))
+    return out
 
 
 class Session:
@@ -225,6 +265,56 @@ class Session:
         light = edge[lum >= np.percentile(lum, 40)]
         c = np.median(light if len(light) else edge, axis=0) / 255.0
         return tuple(float(v) for v in c)
+
+    def _cover(self, page, rect, zoom=3.0):
+        """Hide what is inside rect (displayed coordinates) by rebuilding the paper around
+        it: every row continues the colour found left and right of the area, so ruled
+        lines, shading and the grain of a scan go on under the removed writing. A plain
+        white page simply gets a white rectangle."""
+        rect = fitz.Rect(rect) & page.rect
+        if rect.is_empty:
+            return
+        m = max(4.0, min(rect.height * 0.8, 14.0))
+        ring = fitz.Rect(rect.x0 - m, rect.y0, rect.x1 + m, rect.y1) & page.rect
+        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=ring, alpha=False)
+        a = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3]
+        H, W = a.shape[:2]
+        lx = int(round((rect.x0 - ring.x0) * zoom))
+        rx = int(round((rect.x1 - ring.x0) * zoom))
+        bw = max(int(m * zoom * 0.8), 3)
+        left = a[:, max(lx - bw, 0):lx].astype(np.float32)
+        right = a[:, rx:min(rx + bw, W)].astype(np.float32)
+        sides = [x for x in (left, right) if x.shape[1] >= 2]
+        if H < 2 or not sides:
+            page.draw_rect(_unrot(page, rect), color=None, fill=self._background(page, rect), overlay=True)
+            return
+        border = np.concatenate(sides, axis=1)
+        if float(border.std()) < 1.5:                    # flat paper (a digital page)
+            c = tuple(float(v) / 255 for v in np.median(border.reshape(-1, 3), axis=0))
+            page.draw_rect(_unrot(page, rect), color=None, fill=c, overlay=True)
+            return
+        # each side's colour per row; a word touching the area is sparse in a row, the median ignores it
+        cols = [np.median(x, axis=1) for x in sides]
+        # rows hit by neighbouring writing are much darker than the paper: use the lighter side
+        if len(cols) == 2:
+            lum = [c.mean(axis=1) for c in cols]
+            gap = lum[0] - lum[1]
+            cols = [np.where((gap < -40)[:, None], cols[1], cols[0]), np.where((gap > 40)[:, None], cols[0], cols[1])]
+        w = rx - lx
+        t = np.linspace(0, 1, max(w, 1))[None, :, None]
+        fill = cols[0][:, None, :] * (1 - t) + cols[-1][:, None, :] * t
+        # the grain of the paper: small deviations of the border pixels, reused at random
+        dev = border - np.median(border, axis=1, keepdims=True)
+        dev = dev[(np.abs(dev).max(axis=2) < 14)]
+        if len(dev):
+            rng = np.random.default_rng(0)
+            fill = fill + dev[rng.integers(0, len(dev), size=fill.shape[:2])]
+        patch = np.clip(fill, 0, 255).astype(np.uint8)
+        from PIL import Image
+        buf = io.BytesIO()
+        Image.fromarray(patch).save(buf, "JPEG", quality=92)
+        target = fitz.Rect(ring.x0 + lx / zoom, ring.y0, ring.x0 + rx / zoom, ring.y1)
+        page.insert_image(_unrot(page, target), stream=buf.getvalue(), rotate=page.rotation, overlay=True)
 
     # ------------------------------------------------------------------ text model
     TEXT_FLAGS = fitz.TEXT_PRESERVE_WHITESPACE | fitz.TEXT_PRESERVE_LIGATURES | fitz.TEXT_MEDIABOX_CLIP
@@ -540,10 +630,9 @@ class Session:
             page = self.doc[index]
             r = fitz.Rect(rect)
             self._checkpoint()
-            bg = self._background(page, r)
             page.add_redact_annot(_to_text(page, r), fill=False)
             page.apply_redactions(**REDACT_KW)
-            page.draw_rect(_unrot(page, r), color=None, fill=bg, overlay=True)
+            self._cover(page, r)
             self._touch(index)
             return self.blocks(index)
 
@@ -558,8 +647,8 @@ class Session:
                     r = _shown(page, r)
                     hits.append({"page": i, "bbox": [r.x0, r.y0, r.x1, r.y1], "kind": "text"})
                 for j, l in enumerate(self.ink.get(i, [])):
-                    if term.lower() in l["text"].lower():
-                        hits.append({"page": i, "bbox": l["bbox"], "kind": "ink", "id": j})
+                    for bbox, fuzzy in _find_in_line(l, term):
+                        hits.append({"page": i, "bbox": bbox, "kind": "ink", "id": j, "fuzzy": fuzzy})
             return hits
 
     def replace_all(self, term, repl):
@@ -958,8 +1047,7 @@ class Session:
                 base, xh = HW.measure_line(page, r, line["text"])
             self._checkpoint()
             cover = fitz.Rect(r.x0 - 2, r.y0 - h * 0.14, r.x1 + 2, r.y1 + h * 0.14) & page.rect
-            bg = self._background(page, cover)
-            page.draw_rect(_unrot(page, cover), color=None, fill=bg, overlay=True)
+            self._cover(page, cover)
             if text.strip():
                 # the line is rewritten with the letters of ITS writing only (never mixed)
                 ink_color = _rgb(color) if color else lib.ink_color()
