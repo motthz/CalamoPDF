@@ -101,14 +101,11 @@ def download(info, progress=None):
     return target
 
 
-def apply(info, path, relaunch):
-    """Start the hidden script that installs the update once this process has exited."""
-    exe = _exe()
-    # the one-file bootloader (parent process) keeps the exe locked until it exits
-    pid = os.getppid() if frozen() else os.getpid()
-    lines = ["@echo off", "setlocal", ":wait",
-             f'tasklist /FI "PID eq {pid}" 2>nul | find "{pid}" >nul && (timeout /t 1 /nobreak >nul & goto wait)',
-             f'tasklist /FI "PID eq {os.getpid()}" 2>nul | find "{os.getpid()}" >nul && (timeout /t 1 /nobreak >nul & goto wait)']
+def build_script(info, path, relaunch, exe, pids):
+    """The hidden .cmd that installs the update once the given processes have exited."""
+    ids = ",".join(str(p) for p in pids)
+    lines = ["@echo off", "chcp 65001 >nul", "setlocal",
+             f'powershell -NoProfile -NonInteractive -Command "Wait-Process -Id {ids} -Timeout 120 -ErrorAction SilentlyContinue"']
     if info["kind"] == "setup":
         appdir = os.path.dirname(exe)
         args = f'/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /DIR="{appdir}"'
@@ -121,12 +118,20 @@ def apply(info, path, relaunch):
         lines.append(f'del "{path}" >nul 2>&1')
     else:
         lines += ["set n=0", ":swap",
-                  f'move /y "{path}" "{exe}" >nul 2>&1 || (set /a n+=1 & timeout /t 1 /nobreak >nul & if %n% lss 20 goto swap)']
+                  f'move /y "{path}" "{exe}" >nul 2>&1 || (set /a n+=1 & ping -n 2 127.0.0.1 >nul & if %n% lss 30 goto swap)']
         if relaunch:
             lines.append(f'start "" "{exe}"')
-    lines.append('del "%~f0"')
+    lines.append('(goto) 2>nul & del "%~f0"')
+    return "\r\n".join(lines) + "\r\n"
+
+
+def apply(info, path, relaunch):
+    """Start the hidden script that installs the update once this process has exited."""
+    exe = _exe()
+    # the one-file bootloader (parent process) keeps the exe locked until it exits
+    pids = [os.getpid()] + ([os.getppid()] if frozen() else [])
     script = os.path.join(os.path.dirname(path), "aggiorna-calamo.cmd")
-    with open(script, "w", encoding="mbcs" if os.name == "nt" else "utf-8") as f:
-        f.write("\r\n".join(lines) + "\r\n")
+    with open(script, "w", encoding="utf-8", newline="") as f:
+        f.write(build_script(info, path, relaunch, exe, pids))
     flags = 0x08000000 | 0x00000200   # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
     subprocess.Popen(["cmd.exe", "/c", script], creationflags=flags, close_fds=True)

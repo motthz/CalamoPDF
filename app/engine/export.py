@@ -29,6 +29,12 @@ def _inside(rect, rects):
     return any(r.contains(c) for r in rects)
 
 
+def _ink_lines(ink, pi):
+    """Recognised lines to export. A printed line already rewritten by Calamo is now real
+    text on the page, so it is exported with the page text, not a second time."""
+    return [l for l in ink.get(pi, []) if not (l.get("kind") == "print" and l.get("synthetic"))]
+
+
 # --------------------------------------------------------------------------- Word
 def to_docx(doc, ink, path, progress=None):
     word = Document()
@@ -62,7 +68,7 @@ def to_docx(doc, ink, path, progress=None):
                 items.append((r.y0, r.x0, "image", b))
         for t, tr in zip(tables, trects):
             items.append((tr.y0, tr.x0, "table", t))
-        for l in ink.get(pi, []):
+        for l in _ink_lines(ink, pi):
             items.append((l["bbox"][1], l["bbox"][0], "ink", l))
         items.sort(key=lambda it: (round(it[0] / 4), it[1]))
 
@@ -133,9 +139,10 @@ def to_docx(doc, ink, path, progress=None):
                 if last_bottom is not None:
                     para.paragraph_format.space_before = Pt(max(0, min(obj["bbox"][1] - last_bottom, 40)))
                 run = para.add_run(obj["text"])
-                run.font.name = HAND_FONT
-                run.font.size = Pt(max(8, min(round((obj["bbox"][3] - obj["bbox"][1]) * 0.8), 28)))
-                run.font.color.rgb = RGBColor(0x1F, 0x2A, 0x5A)
+                printed = obj.get("kind") == "print"
+                run.font.name = "Calibri" if printed else HAND_FONT
+                run.font.size = Pt(max(8, min(round((obj["bbox"][3] - obj["bbox"][1]) * (0.75 if printed else 0.8)), 28)))
+                run.font.color.rgb = RGBColor(0x1A, 0x1B, 0x20) if printed else RGBColor(0x1F, 0x2A, 0x5A)
                 last_bottom = obj["bbox"][3]
         if pi < len(doc) - 1:
             word.add_paragraph().add_run().add_break(WD_BREAK.PAGE)
@@ -154,13 +161,15 @@ def _cell_value(v):
     t = s.replace("€", "").replace("%", "").replace(" ", "")
     if t and _num.match(t):
         try:
+            if "," not in t and re.match(r"^-?\d{1,3}(\.\d{3})+$", t):
+                t = t.replace(".", "")          # Italian thousands: 120.400
             if "," in t and "." in t:
                 t = t.replace(".", "").replace(",", ".") if t.rfind(",") > t.rfind(".") else t.replace(",", "")
             elif "," in t:
                 t = t.replace(",", ".")
             val = float(t)
             if s.endswith("%"):
-                return val / 100
+                return round(val / 100, 10)
             return int(val) if val.is_integer() and "." not in t else val
         except ValueError:
             pass
@@ -255,7 +264,7 @@ def to_xlsx(doc, ink, path, progress=None):
             write(ws, t.extract(), header=True)
             count += 1
         if not tables:
-            rows = _layout_rows(page, ink.get(pi, []))
+            rows = _layout_rows(page, _ink_lines(ink, pi))
             if rows:
                 ws = wb.create_sheet(f"Pagina {pi + 1}")
                 write(ws, rows, header=False)

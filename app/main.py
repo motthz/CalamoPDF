@@ -73,6 +73,7 @@ class Api:
         self._update = None              # newer release found on GitHub
         self._update_file = None         # downloaded and ready to install
         self._update_relaunch = False
+        self._downloading = False
         self._closing_ok = False
         self._max = False
         self._restore_rect = None
@@ -107,6 +108,9 @@ class Api:
     @safe
     def check_update(self):
         """Ask GitHub for a newer release; download it in the background if allowed."""
+        if self._update and (self._update_file or self._downloading):
+            # already found: don't download it twice
+            return {**self._update, "ready": bool(self._update_file), "downloading": self._downloading}
         info = updater.check(VERSION)
         self._update = info
         if not info:
@@ -114,26 +118,41 @@ class Api:
         # an update to this version was already attempted and we are still old: don't loop
         info["retry"] = self._settings.get("updateTried") == info["version"]
         if info["canInstall"] and self._settings.get("autoUpdate", True) and not info["retry"]:
-            threading.Thread(target=self._download_update, daemon=True).start()
+            self._start_download()
             info["downloading"] = True
         return info
+
+    def _start_download(self):
+        if self._downloading or self._update_file:
+            return
+        self._downloading = True
+        threading.Thread(target=self._download_update, daemon=True).start()
 
     @safe
     def download_update(self):
         if not self._update or not self._update.get("canInstall"):
             raise RuntimeError("Nessun aggiornamento installabile.")
-        threading.Thread(target=self._download_update, daemon=True).start()
+        self._start_download()
         return True
 
     def _download_update(self):
         info = self._update
+        shown = [-1]
+
+        def progress(f):
+            pct = int(f * 100)
+            if pct != shown[0]:
+                shown[0] = pct
+                self._js(f"app.updateProgress({f:.2f})")
         try:
-            path = updater.download(info, lambda f: self._js(f"app.updateProgress({f:.3f})"))
+            path = updater.download(info, progress)
             self._update_file = path
             self._js(f"app.updateReady({json.dumps(info)})")
         except Exception as e:
             traceback.print_exc()
             self._js(f"app.updateFailed({json.dumps(str(e))})")
+        finally:
+            self._downloading = False
 
     @safe
     def restart_to_update(self):

@@ -283,6 +283,7 @@ function drawOverlay(P) {
     frag.appendChild(d);
   });
   (P.data.ink || []).forEach(l => {
+    if (l.kind === "print" && l.synthetic) return;   // rewritten print is now normal text: edit it as such
     const d = document.createElement("div");
     d.className = "ink" + (isDoubt(l) ? " doubt" : "") + (l.kind === "print" ? " print" : "");
     d.dataset.id = l.id;
@@ -800,11 +801,12 @@ function renderInkList() {
     it.className = "ink-item" + (doubt ? " doubt" : "");
     it.dataset.id = l.id;
     const canMark = !l.synthetic && l.kind !== "print";
-    it.innerHTML = `<div class="ii-top"><span class="src-badge"></span><span class="grow">${l.synthetic ? "riscritto" : ""}</span>
+    const asText = l.synthetic && l.kind === "print";    // now ordinary text on the page
+    it.innerHTML = `<div class="ii-top"><span class="src-badge"></span><span class="grow">${asText ? "riscritto · si modifica come testo" : l.synthetic ? "riscritto" : ""}</span>
       <button class="icon-btn" data-a="show" title="Mostra nella pagina"><svg><use href="#i-search"/></svg></button>
       ${canMark ? `<button class="icon-btn" data-a="letters" title="Segna lettere e numeri"><svg><use href="#i-letters"/></svg></button>` : ""}
-      <button class="icon-btn" data-a="rewrite" title="Riscrivi con la calligrafia"><svg><use href="#i-pen"/></svg></button></div>
-      <input value="${esc(l.text)}" spellcheck="false">
+      ${asText ? "" : `<button class="icon-btn" data-a="rewrite" title="Riscrivi"><svg><use href="#i-pen"/></svg></button>`}</div>
+      <input value="${esc(l.text)}" spellcheck="false"${asText ? " readonly" : ""}>
       <div class="ii-actions" hidden><button class="btn ghost sm" data-a="teach"><svg><use href="#i-learn"/></svg>Insegna lettura</button></div>`;
     setSrcBadge($(".src-badge", it), l);
     const input = $("input", it), acts = $(".ii-actions", it);
@@ -813,7 +815,7 @@ function renderInkList() {
     $("[data-a=teach]", it).onclick = () => guarded(() => teach(S.current, l.id, input.value.trim()));
     $("[data-a=show]", it).onclick = () => flashInk(S.current, l.id);
     if (canMark) $("[data-a=letters]", it).onclick = () => openLetters(S.current, l.id);
-    $("[data-a=rewrite]", it).onclick = () => {
+    if (!asText) $("[data-a=rewrite]", it).onclick = () => {
       const P = S.pages[S.current];
       flashInk(S.current, l.id);
       setTimeout(() => {
@@ -1091,7 +1093,9 @@ async function checkUpdate(manual) {
       act.hidden = true;
       return;
     }
-    if (u.downloading) {
+    if (u.ready) {
+      window.app.updateReady(u, true);
+    } else if (u.downloading) {
       st.textContent = `Versione ${u.version}: download in corso…`;
       status(`Scaricamento aggiornamento ${u.version}…`);
       act.hidden = true;
@@ -1343,12 +1347,12 @@ window.app = {
     status(`Scaricamento aggiornamento ${v}… ${Math.round(f * 100)}%`);
     $("#updateStatus").textContent = `Versione ${v}: download ${Math.round(f * 100)}%`;
   },
-  updateReady(u) {
+  updateReady(u, quiet) {
     status(`Aggiornamento ${u.version} pronto: verrà installato alla chiusura`);
     $("#updateStatus").textContent = `Versione ${u.version} pronta: verrà installata alla chiusura.`;
     const act = $("#updateAction");
     act.textContent = "Riavvia e aggiorna ora"; act.hidden = false; act.onclick = restartToUpdate;
-    toast(`Calamo ${u.version} è pronto. Verrà installato alla chiusura.`, "ok", { label: "Riavvia ora", run: restartToUpdate });
+    if (!quiet) toast(`Calamo ${u.version} è pronto. Verrà installato alla chiusura.`, "ok", { label: "Riavvia ora", run: restartToUpdate });
   },
   updateFailed(msg) {
     status("");

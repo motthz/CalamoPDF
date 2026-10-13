@@ -556,21 +556,32 @@ class Session:
             learned = 0
             marked = sorted((s for s in segments if s.get("char", "").strip()), key=lambda s: s["x0"])
             if update_text and marked:
-                h = line["bbox"][3] - line["bbox"][1]
-                words = line.get("words") or []
-                breaks = [(a["bbox"][2], b["bbox"][0]) for a, b in zip(words, words[1:])]
-                text = marked[0]["char"]
-                for prev, cur in zip(marked, marked[1:]):
-                    # a space where the OCR saw two words, or where the gap is wide
-                    mid = (prev["x1"] + cur["x0"]) / 2
-                    split = any(a - h * 0.1 <= mid <= b + h * 0.1 for a, b in breaks) or cur["x0"] - prev["x1"] > h * 0.3
-                    text += (" " if split else "") + cur["char"]
+                text = self._letters_text(line, marked)
                 if text != line["text"]:
                     learned = self.learning.learn(line["raw"] if line["source"] != "user" else line["text"], text)
                     line["text"] = text
                 line["source"], line["doubt"], line["kind"] = "user", 0.0, "hand"
             return {"ink": self._ink_public(index), "stored": stored, "learned": learned,
                     "hand": self.hand.summary(), "stats": self.learning.stats()}
+
+    @staticmethod
+    def _letters_text(line, marked):
+        """Reading of a line from the letters marked by the user, with spaces between words."""
+        chars = "".join(s["char"] for s in marked)
+        if chars == "".join(line["text"].split()):
+            return line["text"]                     # same letters: keep the spacing of the reading
+        h = line["bbox"][3] - line["bbox"][1]
+        words = line.get("words") or []
+        breaks = [(a["bbox"][2], b["bbox"][0]) for a, b in zip(words, words[1:])]
+        gaps = [cur["x0"] - prev["x1"] for prev, cur in zip(marked, marked[1:])]
+        typical = sorted(gaps)[len(gaps) // 2] if gaps else 0
+        text = marked[0]["char"]
+        for prev, cur, gap in zip(marked, marked[1:], gaps):
+            # a space where the OCR saw two words, or where the gap is much wider than between letters
+            mid = (prev["x1"] + cur["x0"]) / 2
+            split = any(a - h * 0.1 <= mid <= b + h * 0.1 for a, b in breaks) or gap > max(h * 0.25, typical + h * 0.15)
+            text += (" " if split else "") + cur["char"]
+        return text
 
     def _dark_color(self, page, rect):
         pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=rect & page.rect, alpha=False)

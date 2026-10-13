@@ -171,7 +171,7 @@ def analyze_page(page, learning, lang_tag=None, include_native=False):
             x0, y0, x1, y1 = (v / zoom for v in w["box"])
             r = fitz.Rect(x0, y0, x1, y1)
             if not is_native(r):
-                kept.append({"text": fix_numbers(w["text"]), "bbox": [r.x0, r.y0, r.x1, r.y1]})
+                kept.append({"text": fix_letters(fix_numbers(w["text"])), "bbox": [r.x0, r.y0, r.x1, r.y1]})
         if not kept:
             continue
         # split lines where a big horizontal gap separates groups of words
@@ -227,6 +227,30 @@ def fix_numbers(word):
     if digits == 0 or other > 0 or digits < look:
         return word
     return pre + "".join(DIGIT_LOOKALIKE.get(c, c) for c in core) + post
+
+
+# digits the OCR typically reads in place of handwritten letters
+LETTER_LOOKALIKE = {"0": "o", "1": "I", "5": "s", "8": "B", "6": "b", "9": "g"}
+
+
+def fix_letters(word):
+    """'Firmat0' -> 'Firmato', 'c1ao' -> 'clao': a single stray digit inside a word made of letters."""
+    m = _WORD_RE.match(word)
+    pre, core, post = m.group(1), m.group(2), m.group(3)
+    digits = [i for i, c in enumerate(core) if c.isdigit()]
+    letters = sum(c.isalpha() for c in core)
+    if len(digits) != 1 or letters < 3 or letters + 1 != len(core) or core[digits[0]] not in LETTER_LOOKALIKE:
+        return word
+    i = digits[0]
+    ch = LETTER_LOOKALIKE[core[i]]
+    neighbours = core[max(i - 1, 0):i] + core[i + 1:i + 2]
+    upper = bool(neighbours) and all(c.isupper() for c in neighbours if c.isalpha())
+    if core[i] == "1" and not upper:
+        return word                     # "1" for "i" or "l"? can't tell: left for the user
+    ch = ch.upper() if upper else ch
+    if core[i] == "0" and i == 0 and core[1:2].islower():
+        ch = "O"                        # capital at the start of a word: "0ttimo" -> "Ottimo"
+    return pre + core[:i] + ch + core[i + 1:] + post
 
 
 def _is_number(tok):
