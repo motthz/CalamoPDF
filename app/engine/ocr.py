@@ -235,6 +235,10 @@ def analyze_page(page, learning, lang_tag=None, include_native=False):
 
     result = []
     for words in lines:
+        # "II budget": two capital I's before a lowercase word are the article "Il"
+        for w, nxt in zip(words, words[1:]):
+            if w["text"] == "II" and nxt["text"][:1].islower():
+                w["text"] = "Il"
         raw = " ".join(w["text"] for w in words)
         x0 = min(w["bbox"][0] for w in words)
         y0 = min(w["bbox"][1] for w in words)

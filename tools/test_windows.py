@@ -144,6 +144,8 @@ def test_writings():
     sid = {w: {l["style"] for l in found[w]} for w in found}
     check("writings: print kept together and printed", len(sid["print"]) == 1
           and all(l["kind"] == "print" for l in found["print"]), str(sid["print"]))
+    check("writings: each person is one writing", len(sid["A"]) == 1 and len(sid["B"]) == 1,
+          f"A={sid['A']} B={sid['B']}")
     check("writings: the two people are not mixed", not (sid["A"] & sid["B"]) and not (sid["print"] & (sid["A"] | sid["B"])),
           f"A={sid['A']} B={sid['B']}")
     check("writings: handwriting recognised as handwriting",

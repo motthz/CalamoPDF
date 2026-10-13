@@ -73,8 +73,10 @@ def ink_colour(rgb, mask):
 def line_features(rgb, height_pt, hand_score):
     mask = ink_mask(rgb) if rgb.size else np.zeros((1, 1), bool)
     h = max(rgb.shape[0], 1)
+    # how much ink the measures come from: short pieces give noisy slant and stroke
+    weight = float(np.clip(rgb.shape[1] / max(h * 6, 1), 0.2, 1.0))
     return {"ink": ink_colour(rgb, mask), "stroke": stroke_width(mask) / h, "slant": slant(mask),
-            "height": float(height_pt), "hand": float(hand_score)}
+            "height": float(height_pt), "hand": float(hand_score), "w": weight}
 
 
 # --------------------------------------------------------------------------- grouping
@@ -90,26 +92,48 @@ def distance(f, g):
     c = _colour_dist(f["ink"], g["ink"])
     if c > 55:
         return 9.0                                   # a different pen
+    rel = min(f.get("w", 1.0), g.get("w", 1.0))      # trust shape measures of long lines more
     sw = abs(math.log(max(f["stroke"], 1e-3) / max(g["stroke"], 1e-3))) / 0.45
     sl = abs(f["slant"] - g["slant"]) / 14.0
     hs = abs(math.log(max(f["height"], 1) / max(g["height"], 1))) / 0.5
     hand = abs(f["hand"] - g["hand"]) / 0.6
-    return c / 45.0 + sw * 0.6 + sl * 0.6 + hs * 0.5 + hand * 0.6
+    return c / 45.0 + (sw * 0.6 + sl * 0.6 + hand * 0.6) * rel + hs * 0.5
 
 
 def _mean(feats):
-    return {"ink": np.mean([f["ink"] for f in feats], axis=0).tolist(),
+    w = np.array([f.get("w", 1.0) for f in feats])
+    return {"w": float(min(1.0, w.sum())),
+            "ink": np.mean([f["ink"] for f in feats], axis=0).tolist(),
             "stroke": float(np.median([f["stroke"] for f in feats])),
             "slant": float(np.median([f["slant"] for f in feats])),
             "height": float(np.median([f["height"] for f in feats])),
             "hand": float(np.mean([f["hand"] for f in feats]))}
 
 
-def group(feats, threshold=1.0):
-    """Greedy agglomerative grouping. Returns a group index for every line."""
+def group(feats, threshold=1.0, boxes=None):
+    """Greedy agglomerative grouping. Returns a group index for every line.
+    With boxes, pieces on the same text row written with the same ink start together."""
     n = len(feats)
     groups = [[i] for i in range(n)]
-    cents = [dict(f) for f in feats]
+    if boxes:
+        for i in range(n):
+            for j in range(i + 1, n):
+                a, b = boxes[i], boxes[j]
+                inter = min(a[3], b[3]) - max(a[1], b[1])
+                same_row = inter / max(min(a[3] - a[1], b[3] - b[1]), 1e-3) >= 0.55
+                near = max(b[0] - a[2], a[0] - b[2], 0) < 3 * max(a[3] - a[1], b[3] - b[1])
+                f, g = feats[i], feats[j]
+                similar = (_colour_dist(f["ink"], g["ink"]) < 30
+                           and abs(math.log(max(f["height"], 1) / max(g["height"], 1))) < 0.35
+                           # a printed label next to a signature: same black, but print vs hand
+                           and (min(f.get("w", 1), g.get("w", 1)) < 0.6 or abs(f["hand"] - g["hand"]) < 0.35))
+                if same_row and near and similar:
+                    gi = next(g for g in groups if i in g)
+                    gj = next(g for g in groups if j in g)
+                    if gi is not gj:
+                        gi.extend(gj)
+                        groups.remove(gj)
+    cents = [_mean([feats[k] for k in g]) for g in groups]
     while len(groups) > 1:
         best, pair = threshold, None
         for i in range(len(groups)):
@@ -198,8 +222,11 @@ def unread_lines(rgb, zoom, known_rects):
     H, W = mask.shape
     # forget ink already explained by OCR words or digital text
     for r in known_rects:
-        x0, y0, x1, y1 = (int(max(v * zoom, 0)) for v in r)
-        mask[max(y0 - 2, 0):min(y1 + 2, H), max(x0 - 2, 0):min(x1 + 2, W)] = False
+        # letters sticking out of a word box (ascenders, tails, the last letter) belong to it
+        h = (r[3] - r[1]) * zoom
+        x0, y0 = int(max(r[0] * zoom - h * 0.6, 0)), int(max(r[1] * zoom - h * 0.3, 0))
+        x1, y1 = int(min(r[2] * zoom + h * 0.6, W)), int(min(r[3] * zoom + h * 0.3, H))
+        mask[y0:y1, x0:x1] = False
     # remove long rules (table lines, underlines)
     for axis in (0, 1):
         runs_len = int(60 * zoom)
@@ -221,7 +248,7 @@ def unread_lines(rgb, zoom, known_rects):
     for x0, y0, x1, y1, n in _components(smeared):
         w, h = (x1 - x0) / zoom, (y1 - y0) / zoom
         ink = mask[y0:y1, x0:x1].sum()
-        if h < 5 or h > 70 or w < 12 or w < h * 0.8:
+        if h < 5 or h > 70 or w < 12 or w < h * 1.2:
             continue                                   # dots, noise, pictures, vertical strokes
         density = ink / max((x1 - x0) * (y1 - y0), 1)
         if density < 0.03 or density > 0.6:

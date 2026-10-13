@@ -606,7 +606,7 @@ class Session:
             old = self.hands.get(index)
             pw = self.hands[index] = PageWritings()
             # lines written the same way (same pen, stroke, slant, size) belong to one writing
-            groups = WR.group([l["feat"] for l in lines]) if lines else []
+            groups = WR.group([l["feat"] for l in lines], boxes=[l["bbox"] for l in lines]) if lines else []
             for g in sorted(set(groups)):
                 members = [l for l, k in zip(lines, groups) if k == g]
                 # printed or handwritten is decided for the whole writing, so it is coherent
