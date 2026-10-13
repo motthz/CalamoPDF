@@ -1,5 +1,21 @@
 ## Novità di Calamo PDF Studio 1.3.0
 
+**Un lettore dedicato alla scrittura a mano.**
+- Nelle Impostazioni puoi scaricare (una sola volta, circa 60 MB) un modello che legge le righe scritte a mano molto meglio dell'OCR di Windows; poi funziona offline. Nei test sbaglia il 3% dei caratteri contro il 44% dell'OCR di Windows.
+- Un **dizionario italiano** corregge gli errori tipici di lettura ("Ottinoo" → "Ottimo", "effro" → "entro") senza stravolgere nomi e cognomi.
+- Quando correggi una parola, la stessa correzione viene proposta nelle altre righe della **stessa persona**.
+- Le scansioni **storte** vengono raddrizzate prima della lettura.
+- La lettura delle pagine avviene **in background**: puoi continuare a lavorare e interromperla dalla barra in basso.
+- **Ricerca tollerante**: cercando un nome trovi anche le righe a mano lette con qualche lettera sbagliata (evidenziate con il bordo tratteggiato).
+
+**Scrivere a mano in modo più naturale.**
+- **Paragrafi**: Maiusc+Invio va a capo; il testo lungo continua sulle righe sotto, con l'interlinea di quella persona, solo dove la pagina è libera.
+- Le lettere vengono scelte e allineate perché il tratto di uscita di una si colleghi all'entrata della successiva.
+- La scrittura cancellata viene coperta **ricostruendo la carta** (righe del quaderno, ombre, grana della scansione) invece che con un rettangolo di colore; vale anche per la gomma.
+- **Unisci e dividi le scritture**: trascina una scrittura su un'altra se sono la stessa persona, o dividila in due se ne mescola due.
+
+**Più veloce.** L'annulla salva solo la pagina modificata (molto più leggero sui documenti lunghi) e la lettura di una pagina è più rapida.
+
 **Coerenza tra le scritture.**
 - **Più persone sullo stesso foglio**: Calamo separa le righe scritte da persone diverse (colore dell'inchiostro, spessore del tratto, inclinazione, dimensione) e i caratteri stampati. Ogni riga viene riscritta solo con le lettere della *sua* scrittura: niente più calligrafie mescolate. Ogni persona ha un colore sulla pagina; nel riquadro della riga puoi spostarla in un'altra scrittura se serve.
 - **Stampato o a mano, deciso per tutta la scrittura**: se una scrittura viene presa per stampata (o viceversa), la correggi una volta e vale per tutte le sue righe.

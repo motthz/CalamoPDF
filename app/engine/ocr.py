@@ -342,21 +342,64 @@ def read_page(job, learning, lang_tag=None, reader=None, lexicon=None, prefer=No
     except Exception:
         pass
     for l in result:
-        crop = _crop(rgb, l["bbox"], zoom)
-        score = hand_score(crop, l["raw"])
-        l["handScore"] = round(score, 2)
-        l["kind"] = "hand" if score >= PRINT_BELOW else "print"
-        l["feat"] = line_features(crop, l["bbox"][3] - l["bbox"][1], score)
+        _measure(l, rgb, zoom)
+    if reader is not None:
+        # the reader reads whole lines: give it the pieces the OCR split back together
+        result = _join_pieces(result, rgb, zoom)
+    for l in result:
         if cancelled and cancelled():
             raise RuntimeError("Lettura annullata.")
         if l["kind"] == "hand":
-            _second_opinion(l, crop, zoom, reader, lexicon, prefer)
+            _second_opinion(l, _crop(rgb, l["bbox"], zoom), zoom, reader, lexicon, prefer)
         text, learned = learning.apply(l["raw"])
         l["text"] = text
         if learned:
             l["source"] = "learned"
     result.sort(key=lambda l: (round(l["bbox"][1] / 6), l["bbox"][0]))
     return result
+
+
+def _measure(l, rgb, zoom):
+    crop = _crop(rgb, l["bbox"], zoom)
+    score = hand_score(crop, l["raw"])
+    l["handScore"] = round(score, 2)
+    l["kind"] = "hand" if score >= PRINT_BELOW else "print"
+    l["feat"] = line_features(crop, l["bbox"][3] - l["bbox"][1], score)
+
+
+def _join_pieces(lines, rgb, zoom):
+    """Handwriting the OCR cut into pieces of one row ("Visto e" | "approvato", or a piece
+    it could not read at all) becomes one line again, if the pieces are close and written
+    with the same pen."""
+    from .writers import _colour_dist
+    out = []
+    for l in sorted(lines, key=lambda l: l["bbox"][0]):
+        joined = False
+        for m in out:
+            # only handwriting, or ink nobody read, next to handwriting
+            if not all(x["kind"] == "hand" or x["source"] == "unread" for x in (l, m)):
+                continue
+            if l["source"] == m["source"] == "unread":
+                continue
+            a, b = m["bbox"], l["bbox"]
+            inter = min(a[3], b[3]) - max(a[1], b[1])
+            h = max(a[3] - a[1], b[3] - b[1])
+            if (inter >= 0.5 * min(a[3] - a[1], b[3] - b[1]) and 0 <= b[0] - a[2] < 2.5 * h
+                    and _colour_dist(m["feat"]["ink"], l["feat"]["ink"]) < 40):
+                m["bbox"] = [a[0], min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3])]
+                m["words"] = m["words"] + l["words"]
+                m["raw"] = (m["raw"] + " " + l["raw"]).strip()
+                m["text"] = m["raw"]
+                if m["source"] == "unread" and l["source"] != "unread":
+                    m["source"] = l["source"]
+                m["doubt"] = max(m["doubt"], l["doubt"]) if m["raw"] else 1.0
+                _measure(m, rgb, zoom)
+                m["kind"] = "hand"
+                joined = True
+                break
+        if not joined:
+            out.append(l)
+    return out
 
 
 def _second_opinion(line, crop, zoom, reader, lexicon, prefer):
