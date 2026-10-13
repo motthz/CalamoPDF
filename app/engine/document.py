@@ -224,8 +224,26 @@ class Session:
             return self.info()
 
     # ------------------------------------------------------------------ undo
-    def _checkpoint(self):
-        self.undo_stack.append((self.doc.tobytes(), copy.deepcopy(self.ink), dict(self.page_versions), dict(self.hands)))
+    def _snapshot(self, page=None):
+        """What undo needs to go back. An edit on one page saves only that page (fast and
+        small even on big documents); page operations, forms and links save everything."""
+        if page is not None and self._page_only_ok(page):
+            one = fitz.open()
+            one.insert_pdf(self.doc, from_page=page, to_page=page, links=False, annots=True)
+            return ("page", page, one.tobytes(garbage=1, deflate=True), copy.deepcopy(self.ink.get(page)),
+                    self.hands.get(page), self.page_versions.get(page, 0))
+        return ("doc", self.doc.tobytes(), copy.deepcopy(self.ink), dict(self.page_versions), dict(self.hands))
+
+    def _page_only_ok(self, page):
+        try:
+            p = self.doc[page]
+            return (len(self.doc) > 1 and not self.doc.is_form_pdf and p.first_link is None
+                    and not self.doc.get_toc())
+        except Exception:
+            return False
+
+    def _checkpoint(self, page=None):
+        self.undo_stack.append(self._snapshot(page))
         if len(self.undo_stack) > self.MAX_UNDO:
             self.undo_stack.pop(0)
         self.redo_stack.clear()
@@ -239,14 +257,28 @@ class Session:
     def _restore(self, src, dst):
         if not src:
             return self.info()
-        dst.append((self.doc.tobytes(), copy.deepcopy(self.ink), dict(self.page_versions), dict(self.hands)))
-        data, ink, versions, self.hands = src.pop()
-        self.doc = fitz.open(stream=data, filetype="pdf")
-        self.resolver = F.FontResolver(self.doc)
-        self.ink = ink
-        # every page gets a new version so the UI re-renders it
-        self.page_versions = {i: max(versions.get(i, 0), self.page_versions.get(i, 0)) + 1
-                              for i in range(len(self.doc))}
+        snap = src.pop()
+        if snap[0] == "page":
+            _, i, data, ink, hands, ver = snap
+            dst.append(self._snapshot(i))
+            one = fitz.open(stream=data, filetype="pdf")
+            self.doc.delete_page(i)
+            self.doc.insert_pdf(one, start_at=i, links=False, annots=True)
+            for store, value in ((self.ink, ink), (self.hands, hands)):
+                if value is None:
+                    store.pop(i, None)
+                else:
+                    store[i] = value
+            self.page_versions[i] = max(ver, self.page_versions.get(i, 0)) + 1
+        else:
+            dst.append(self._snapshot())
+            _, data, ink, versions, self.hands = snap
+            self.doc = fitz.open(stream=data, filetype="pdf")
+            self.resolver = F.FontResolver(self.doc)
+            self.ink = ink
+            # every page gets a new version so the UI re-renders it
+            self.page_versions = {i: max(versions.get(i, 0), self.page_versions.get(i, 0)) + 1
+                                  for i in range(len(self.doc))}
         self.dirty = True
         self.version += 1
         return self.info()
@@ -510,7 +542,7 @@ class Session:
             if new_text == old and not style:
                 return self.blocks(index)
             if checkpoint:
-                self._checkpoint()
+                self._checkpoint(index)
 
             # carry styles through the edit
             p = 0
@@ -616,7 +648,7 @@ class Session:
         with self.lock:
             page = self.doc[index]
             b, lines = self._raw_block(page, block_id)
-            self._checkpoint()
+            self._checkpoint(index)
             for l in lines:
                 page.add_redact_annot(_to_text(page, self._shrink(l["bbox"])))
             page.apply_redactions(**REDACT_KW)
@@ -626,7 +658,7 @@ class Session:
     def add_text(self, index, x, y, text, style):
         with self.lock:
             page = self.doc[index]
-            self._checkpoint()
+            self._checkpoint(index)
             family = style.get("family") or "Arial"
             if family == "Originale":
                 family = "Arial"
@@ -644,7 +676,7 @@ class Session:
         with self.lock:
             page = self.doc[index]
             r = fitz.Rect(rect)
-            self._checkpoint()
+            self._checkpoint(index)
             page.add_redact_annot(_to_text(page, r), fill=False)
             page.apply_redactions(**REDACT_KW)
             self._cover(page, r)
@@ -1194,7 +1226,7 @@ class Session:
                 base, xh = line["base"], line["xh"]
             else:
                 base, xh = HW.measure_line(page, r, line["text"])
-            self._checkpoint()
+            self._checkpoint(index)
             cover = fitz.Rect(r.x0 - 2, r.y0 - h * 0.14, r.x1 + 2, r.y1 + h * 0.14) & page.rect
             self._cover(page, cover)
             written = []
@@ -1225,7 +1257,7 @@ class Session:
             lib = self._lib(index, sid)
             xh = float(height) * 0.45 if height else lib.typical_xh()
             base = y + xh * 1.6                    # (x, y) is the top-left of the new line
-            self._checkpoint()
+            self._checkpoint(index)
             for t, res, b in self._place_lines(index, page, lib, text, x, base, xh,
                                                _rgb(color) if color else lib.ink_color()):
                 self.ink.setdefault(index, []).append({

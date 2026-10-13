@@ -179,9 +179,7 @@ def enhance(rgb):
     lo = min(int(np.searchsorted(hist, hist[-1] * 0.005)), 180)
     # darkest ink -> black, paper -> white (on an almost empty page the darkest 0.5% is paper)
     lut = _GAMMA[np.clip((np.arange(256) - lo) * 255 // max(245 - lo, 1), 0, 255)]
-    buf = io.BytesIO()
-    Image.fromarray(lut[norm]).save(buf, "PNG", compress_level=1)
-    return buf.getvalue()
+    return _png(lut[norm])
 
 
 # --------------------------------------------------------------------------- straightening
@@ -253,7 +251,7 @@ def prepare_page(page, include_native=False):
     pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
     rgb = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3].copy()
     native = [] if include_native else [list(r) for r in _native_rects(page)]
-    return {"rgb": rgb, "png": pix.tobytes("png"), "zoom": zoom, "native": native}
+    return {"rgb": rgb, "png": _png(rgb), "zoom": zoom, "native": native}
 
 
 def analyze_page(page, learning, lang_tag=None, include_native=False, reader=None, lexicon=None, prefer=None):
@@ -261,9 +259,11 @@ def analyze_page(page, learning, lang_tag=None, include_native=False, reader=Non
 
 
 def _png(arr):
+    """The image handed to Windows OCR. BMP, not PNG: Windows decodes both, and a BMP is
+    written in milliseconds where a page-sized PNG takes a quarter of a second."""
     from PIL import Image
     buf = io.BytesIO()
-    Image.fromarray(arr).save(buf, "PNG", compress_level=1)
+    Image.fromarray(np.ascontiguousarray(arr)).convert("RGB").save(buf, "BMP")
     return buf.getvalue()
 
 

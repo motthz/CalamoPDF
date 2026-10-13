@@ -81,6 +81,9 @@ class Api:
         self._restore_rect = None
         self._cancel_gen = 0             # bumped to stop the page readings in progress
         self._model = {"downloading": False, "progress": 0.0, "error": None}
+        # the dictionary takes a moment to load: do it now, not on the first page read
+        from engine.lexicon import LEXICON
+        threading.Thread(target=LEXICON._load, daemon=True).start()
         self.startup_path = next((a for a in sys.argv[1:] if a.lower().endswith(".pdf") and os.path.exists(a)), None)
 
     # ---------------------------------------------------------------- helpers

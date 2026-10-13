@@ -22,6 +22,11 @@ MERGES = {("rn", "m"), ("nn", "m"), ("in", "m"), ("ni", "m"), ("ii", "u"), ("cl"
           ("m", "nn"), ("u", "ii"), ("d", "cl"), ("h", "li"), ("n", "ri"), ("no", "m"), ("on", "m")}
 
 
+_MERGE_END = {}
+for _p, _q in MERGES:
+    _MERGE_END.setdefault((_p[-1], _q[-1]), []).append((_p, _q))
+
+
 class Lexicon:
     def __init__(self, path=DATA):
         self._path = path
@@ -102,19 +107,19 @@ class Lexicon:
     def distance(a, b):
         """Edit distance where OCR look-alikes cost less."""
         n, m = len(a), len(b)
-        d = np.zeros((n + 1, m + 1))
-        d[:, 0] = np.arange(n + 1)
-        d[0, :] = np.arange(m + 1)
+        d = [[float(j) for j in range(m + 1)]] + [[float(i)] + [0.0] * m for i in range(1, n + 1)]
         for i in range(1, n + 1):
+            x = a[i - 1]
+            row, prev = d[i], d[i - 1]
             for j in range(1, m + 1):
-                x, y = a[i - 1], b[j - 1]
+                y = b[j - 1]
                 sub = 0.0 if x == y else (0.4 if frozenset((x, y)) in SIMILAR else 1.0)
-                best = min(d[i - 1, j] + 1, d[i, j - 1] + 1, d[i - 1, j - 1] + sub)
-                for p, q in MERGES:                      # "rn" read for "m", "ff" for "nt"...
+                best = min(prev[j] + 1, row[j - 1] + 1, prev[j - 1] + sub)
+                for p, q in _MERGE_END.get((x, y), ()):   # "rn" read for "m", "ff" for "nt"...
                     if i >= len(p) and j >= len(q) and a[i - len(p):i] == p and b[j - len(q):j] == q:
-                        best = min(best, d[i - len(p), j - len(q)] + 0.4)
-                d[i, j] = best
-        return float(d[n, m])
+                        best = min(best, d[i - len(p)][j - len(q)] + 0.4)
+                row[j] = best
+        return d[n][m]
 
     def candidates(self, word, k=40):
         self._load()
