@@ -7,6 +7,19 @@ const PT = 4 / 3;            // css px per PDF point at 100%
 const TOOL_NAMES = { view: "Naviga", edit: "Modifica", text: "Nuovo testo", hand: "Scrittura a mano", erase: "Gomma" };
 
 const isDoubt = l => l.source === "ocr" && l.doubt > 0.4 && l.kind !== "print";
+// writings (people / typefaces) of each page, as the engine groups them
+const pageStyles = i => (S.pages[i] && S.pages[i].data && S.pages[i].data.styles) || [];
+const styleOf = (i, l) => pageStyles(i).find(st => st.id === l.style);
+function setStyles(page, styles) {
+  const P = S.pages[page];
+  if (P && P.data) P.data.styles = styles;
+}
+function fillStyleSelect(sel, page, kindFilter, selected, withNew) {
+  const sts = pageStyles(page).filter(st => !kindFilter || st.kind === kindFilter);
+  sel.innerHTML = sts.map(st => `<option value="${st.id}">${esc(st.name)}${st.kind === "print" ? " (stampato)" : ""} · ${st.lines} righe</option>`).join("")
+    + (withNew ? `<option value="new">+ Nuova scrittura (solo questa riga)</option>` : "");
+  if (selected != null) sel.value = String(selected);
+}
 
 const S = {
   doc: null, zoom: 1, tool: "edit", current: 0, pages: [], fonts: [], settings: {},
@@ -292,13 +305,16 @@ function drawOverlay(P) {
     frag.appendChild(d);
   });
   (P.data.ink || []).forEach(l => {
-    if (l.kind === "print" && l.synthetic) return;   // rewritten print is now normal text: edit it as such
     const d = document.createElement("div");
-    d.className = "ink" + (isDoubt(l) ? " doubt" : "") + (l.kind === "print" ? " print" : "");
+    const st = styleOf(P.i, l);
+    const unread = l.source === "unread";
+    d.className = "ink" + (unread ? " unread" : isDoubt(l) ? " doubt" : l.kind === "print" ? " print" : st ? " styled" : "");
+    if (st) d.style.setProperty("--c", st.color);
     d.dataset.id = l.id;
-    d.title = (l.kind === "print" ? "Stampato: " : "") + l.text;
+    d.title = unread ? "Non letto: clicca e scrivi cosa c'è" : `${st ? st.name + ": " : ""}${l.text}`;
     Object.assign(d.style, box(l.bbox, s, 3));
-    if (isDoubt(l)) d.innerHTML = `<span class="ink-tag">?</span>`;
+    if (unread) d.innerHTML = `<span class="ink-tag unread-tag">?</span>`;
+    else if (isDoubt(l)) d.innerHTML = `<span class="ink-tag">?</span>`;
     frag.appendChild(d);
   });
   S.hits.forEach((h, k) => {
@@ -644,6 +660,8 @@ function positionPop() {
 }
 function closePop() {
   if (!S.pop) return;
+  // give the keyboard back to the page, so the shortcuts work again
+  if (document.activeElement && document.activeElement.closest("#inkPop")) document.activeElement.blur();
   if (S.pop.temp) S.pop.temp.remove();
   S.pop = null;
   $("#inkPop").hidden = true;
@@ -652,8 +670,12 @@ async function openInk(P, line, anchor) {
   if (!line) return;
   closePop();
   S.pop = { P, line, anchor, kind: "ink" };
-  $("#inkPopTitle").textContent = line.synthetic ? "Testo scritto da Calamo" : line.kind === "print" ? "Testo stampato (scansione)" : "Testo scritto a mano";
+  const st = styleOf(P.i, line);
+  $("#inkPopTitle").textContent = line.source === "unread" ? "Scritta non letta: scrivi cosa c'è" :
+    `${line.synthetic ? "Riscritto" : line.kind === "print" ? "Stampato" : "A mano"}${st ? " · " + st.name : ""}`;
   $("#readSection").hidden = !!line.synthetic;
+  $("#newStyleRow").hidden = true;
+  fillStyleSelect($("#inkStyle"), P.i, null, line.style, true);
   setKindSwitch(line);
   $("#inkCrop").hidden = false;
   $("#inkCrop").removeAttribute("src");
@@ -661,7 +683,7 @@ async function openInk(P, line, anchor) {
   setSrcBadge($("#inkSrc"), line);
   $("#inkNew").value = line.text;
   $("#inkColor").value = S.handInk;
-  $("#inkApply").querySelector("span").textContent = line.kind === "print" ? "Applica come testo stampato" : "Applica con la tua calligrafia";
+  $("#inkApply").querySelector("span").textContent = line.kind === "print" ? "Applica con le lettere della scansione" : "Applica con questa calligrafia";
   $("#inkPop").hidden = false;
   positionPop();
   highlightInkItem(line.id);
@@ -677,6 +699,11 @@ function openHandNew(P, pt, e) {
   S.pop = { P, pt, anchor, kind: "new", temp: anchor };
   $("#inkPopTitle").textContent = "Scrivi a mano";
   $("#readSection").hidden = true;
+  $("#newStyleRow").hidden = !pageStyles(P.i).length;
+  // write as the writing selected in the panel, or the main handwriting of the page
+  const sts = pageStyles(P.i), cur = sts.find(st => st.id === S.style);
+  const pick = cur && cur.kind === "hand" ? cur : sts.find(st => st.kind === "hand") || cur;
+  fillStyleSelect($("#newStyle"), P.i, null, pick ? pick.id : null, false);
   $("#inkCrop").hidden = true;
   $("#inkNew").value = "";
   $("#inkColor").value = S.handInk;
@@ -688,13 +715,14 @@ function openHandNew(P, pt, e) {
 }
 function setKindSwitch(line) {
   $$("#inkKind button").forEach(b => b.classList.toggle("active", b.dataset.kind === (line.kind || "hand")));
-  $("#inkLetters").disabled = line.kind === "print";
+  $("#inkLetters").disabled = !!line.synthetic;
 }
 function setSrcBadge(el, l) {
   const map = { ocr: ["OCR", "src-ocr"], learned: ["Appreso", "src-learned"], user: ["Tu", "src-user"] };
   let [t, c] = map[l.source] || map.ocr;
   if (isDoubt(l)) { t = "Da verificare"; c = "src-doubt"; }
   if (l.kind === "print" && !l.synthetic) { t = "Stampato"; c = "src-print"; }
+  if (l.source === "unread") { t = "Non letto"; c = "src-doubt"; }
   el.textContent = t;
   el.className = "src-badge " + c;
 }
@@ -703,24 +731,34 @@ const previewHand = debounce(async () => {
   const text = $("#inkNew").value;
   const img = $("#inkPreview");
   if (!text.trim()) { img.hidden = true; $("#inkPreviewEmpty").hidden = false; $("#inkCoverage").textContent = ""; return; }
-  const h = S.pop.line ? S.pop.line.bbox[3] - S.pop.line.bbox[1] : S.handHeight;
-  if (S.pop.line && S.pop.line.kind === "print") {
-    img.hidden = true; $("#inkPreviewEmpty").hidden = false; $("#inkCoverage").textContent = "";
-    $("#inkPreviewEmpty").textContent = "Verrà scritto come testo stampato";
-    return;
-  }
   $("#inkPreviewEmpty").textContent = "Anteprima";
   try {
-    const r = await call("preview_hand", S.pop.P.i, text, h, $("#inkColor").value);
-    if (!r) return;
+    const p = S.pop;
+    const r = p.line
+      ? await call("preview_hand", p.P.i, text, null, $("#inkColor").value, null, p.line.id)
+      : await call("preview_hand", p.P.i, text, S.handHeight, $("#inkColor").value, +$("#newStyle").value || null);
+    if (!r || S.pop !== p) return;
     img.src = r.img; img.hidden = false; $("#inkPreviewEmpty").hidden = true;
     const pct = Math.round(r.coverage * 100);
-    $("#inkCoverage").textContent = r.coverage > 0 ? `${pct}% lettere dalla calligrafia della pagina` : "Carattere calligrafico (la pagina non ha lettere apprese)";
+    const who = r.kind === "print" ? "dalla scansione" : "da questa calligrafia";
+    $("#inkCoverage").textContent = r.coverage > 0 ? `${pct}% lettere ${who}` : "Nessuna lettera appresa: uso il carattere più simile";
     positionPop();
   } catch (e) { /* preview is best effort */ }
 }, 220);
 $("#inkNew").addEventListener("input", previewHand);
 $("#inkColor").addEventListener("input", previewHand);
+$("#newStyle").addEventListener("change", () => { S.style = +$("#newStyle").value; previewHand(); });
+$("#inkStyle").addEventListener("change", async () => {
+  const p = S.pop;
+  if (!p || !p.line) return;
+  await guarded(async () => {
+    const r = await call("set_line_style", p.P.i, p.line.id, $("#inkStyle").value);
+    applyInkResult(p.P.i, r);
+    p.line = (S.inkCache[p.P.i] || []).find(l => l.id === p.line.id) || p.line;
+    toast(`Riga spostata in “${(styleOf(p.P.i, p.line) || {}).name}”: verrà riscritta con le sue lettere.`, "ok");
+    openInk(p.P, p.line, p.anchor);
+  });
+});
 $("#inkNew").addEventListener("keydown", e => {
   if (e.key === "Enter" && (e.ctrlKey || !e.shiftKey)) { e.preventDefault(); $("#inkApply").click(); }
   if (e.key === "Escape") closePop();
@@ -744,12 +782,18 @@ $("#inkTeach").onclick = async () => {
     if (syncNew) { $("#inkNew").value = v; previewHand(); }
   });
 };
-async function teach(page, id, text) {
-  const r = await call("correct_ink", page, id, text);
+// every engine result about lines carries the lines and the writings of the page
+function applyInkResult(page, r) {
   S.inkCache[page] = r.ink;
   const P = S.pages[page];
-  if (P.data) { P.data.ink = r.ink; drawOverlay(P); }
-  applyHand(r.hand, page);
+  if (P.data) { P.data.ink = r.ink; P.data.styles = r.styles; drawOverlay(P); }
+  if (page === S.current && r.selected != null) S.style = r.selected;
+  applyHand(r, page);
+  renderInkList();
+}
+async function teach(page, id, text) {
+  const r = await call("correct_ink", page, id, text);
+  applyInkResult(page, r);
   updateLearning(r.stats);
   renderInkList();
   toast(r.learned ? "Grazie! Ho imparato la correzione e la userò d'ora in poi." : "Lettura aggiornata.", "ok");
@@ -763,9 +807,9 @@ $("#inkApply").onclick = async () => {
   closePop();
   await guarded(async () => {
     if (p.kind === "ink") await call("edit_ink", p.P.i, p.line.id, text, color);
-    else await call("add_hand", p.P.i, p.pt.x, p.pt.y, text, S.handHeight, color);
+    else await call("add_hand", p.P.i, p.pt.x, p.pt.y, text, S.handHeight, color, +$("#newStyle").value || null);
     await afterChange();
-    toast(p.kind === "ink" ? "Scrittura a mano aggiornata" : "Testo scritto a mano inserito", "ok");
+    toast(p.kind === "ink" ? "Testo riscritto con le lettere della sua scrittura" : "Testo inserito", "ok");
   }, "Composizione della calligrafia…");
 };
 document.addEventListener("mousedown", e => {
@@ -788,13 +832,9 @@ $("#inkLetters").onclick = () => {
 };
 async function setInkKind(page, id, kind) {
   const r = await call("set_ink_kind", page, id, kind);
-  S.inkCache[page] = r.ink;
-  const P = S.pages[page];
-  if (P.data) { P.data.ink = r.ink; drawOverlay(P); }
-  applyHand(r.hand, page);
-  renderInkList();
-  toast(kind === "print" ? "Riga segnata come stampata: non verrà usata per la calligrafia." :
-    "Riga segnata come scritta a mano: le sue lettere entrano nella calligrafia.", "ok");
+  applyInkResult(page, r);
+  const n = r.changed || 1;
+  toast(`${n > 1 ? `Le ${n} righe di questa scrittura sono` : "Questa scrittura è"} ora ${kind === "print" ? "stampata: verrà riscritta con le lettere della scansione" : "a mano: verrà riscritta con la sua calligrafia"}.`, "ok");
 }
 
 // ---------------------------------------------------------------- recognition panel
@@ -813,13 +853,14 @@ function renderInkList() {
     const doubt = isDoubt(l);
     it.className = "ink-item" + (doubt ? " doubt" : "");
     it.dataset.id = l.id;
-    const canMark = !l.synthetic && l.kind !== "print";
-    const asText = l.synthetic && l.kind === "print";    // now ordinary text on the page
-    it.innerHTML = `<div class="ii-top"><span class="src-badge"></span><span class="grow">${asText ? "riscritto · si modifica come testo" : l.synthetic ? "riscritto" : ""}</span>
+    const canMark = !l.synthetic;
+    const st = styleOf(S.current, l);
+    const chip = st ? `<span class="style-chip" style="--c:${st.color}"><i></i>${esc(st.name)}</span>` : "";
+    it.innerHTML = `<div class="ii-top"><span class="src-badge"></span><span class="grow">${chip}${l.synthetic ? " · riscritto" : ""}</span>
       <button class="icon-btn" data-a="show" title="Mostra nella pagina"><svg><use href="#i-search"/></svg></button>
       ${canMark ? `<button class="icon-btn" data-a="letters" title="Segna lettere e numeri"><svg><use href="#i-letters"/></svg></button>` : ""}
-      ${asText ? "" : `<button class="icon-btn" data-a="rewrite" title="Riscrivi"><svg><use href="#i-pen"/></svg></button>`}</div>
-      <input value="${esc(l.text)}" spellcheck="false"${asText ? " readonly" : ""}>
+      <button class="icon-btn" data-a="rewrite" title="Riscrivi"><svg><use href="#i-pen"/></svg></button></div>
+      <input value="${esc(l.text)}" spellcheck="false"${l.source === "unread" ? ' placeholder="Non letto: scrivi cosa c\'è scritto"' : ""}>
       <div class="ii-actions" hidden><button class="btn ghost sm" data-a="teach"><svg><use href="#i-learn"/></svg>Insegna lettura</button></div>`;
     setSrcBadge($(".src-badge", it), l);
     const input = $("input", it), acts = $(".ii-actions", it);
@@ -828,7 +869,7 @@ function renderInkList() {
     $("[data-a=teach]", it).onclick = () => guarded(() => teach(S.current, l.id, input.value.trim()));
     $("[data-a=show]", it).onclick = () => flashInk(S.current, l.id);
     if (canMark) $("[data-a=letters]", it).onclick = () => openLetters(S.current, l.id);
-    if (!asText) $("[data-a=rewrite]", it).onclick = () => {
+    $("[data-a=rewrite]", it).onclick = () => {
       const P = S.pages[S.current];
       flashInk(S.current, l.id);
       setTimeout(() => {
@@ -862,7 +903,8 @@ async function analyze(all) {
       found += r.ink.length;
       const P = S.pages[i];
       if (P.data) { P.data.ink = r.ink; drawOverlay(P); }
-      applyHand(r.hand, i);
+      if (P.data) P.data.styles = r.styles;
+      applyHand(r, i);
     }
     S.doc = await call("info");
     renderInkList();
@@ -870,16 +912,27 @@ async function analyze(all) {
     else {
       const all = Object.values(S.inkCache).flat();
       const doubt = all.filter(isDoubt).length, printed = all.filter(l => l.kind === "print").length;
-      toast(`Ho letto ${found} righe${printed ? `, ${printed} stampate (in grigio)` : ""}${doubt ? `, ${doubt} da verificare (in rosso)` : ""}. Cliccale per correggere o riscrivere.`, "ok");
+      const unread = all.filter(l => l.source === "unread").length;
+      const writers = pageStyles(S.current).filter(st => st.kind === "hand").length;
+      toast(`Ho letto ${found - unread} righe${writers > 1 ? ` di ${writers} scritture a mano diverse` : ""}${printed ? `, ${printed} stampate` : ""}${doubt ? `, ${doubt} da verificare` : ""}${unread ? `; ${unread} non riesco a leggerle (in arancione): scrivi tu cosa c'è` : ""}.`, "ok");
       if (S.tool !== "edit") setTool("edit");
       $$("#tabs button")[0].click();
     }
   } catch (e) { toast(e.message, "err"); } finally { busy(false); }
 }
-function applyHand(h, page) {
-  // the panel shows the handwriting of the current page only
-  if (!h || (page != null && page !== S.current)) return;
+function applyHand(info, page) {
+  // the panel shows the writings of the current page, and the letters of the selected one
+  if (!info || (page != null && page !== S.current)) return;
+  if (info.styles) {
+    setStyles(S.current, info.styles);
+    renderWritings(info.styles, info.selected);
+  }
+  if (info.height) S.handHeight = info.height;
+  const h = info.hand || info;
+  if (!h.glyphs) return;
   S.glyphCount = h.glyphs.length;
+  $("#styleName").textContent = h.name && info.styles && info.styles.length ? h.name : "—";
+  $("#styleKind").textContent = h.kind === "print" ? "stampato" : info.styles && info.styles.length ? "a mano" : "";
   $("#handPageLabel").textContent = S.doc ? `· pagina ${S.current + 1}` : "";
   S.handInk = h.ink;
   $("#inkSwatch").style.background = h.ink;
@@ -895,22 +948,33 @@ function applyHand(h, page) {
   $("#glyphs").innerHTML = h.glyphs.map(g => `<div class="glyph${g.manual ? " manual" : ""}${g.loaded ? " loaded" : ""}" data-char="${esc(g.char)}" title="“${esc(g.char)}” · ${g.count} esempi${g.manual ? `, ${g.manual} segnati da te` : ""}${g.loaded ? " (dalla calligrafia ricordata)" : ""}"><img src="${g.img}"><span>${esc(g.char)}</span></div>`).join("");
   $$("#glyphs .glyph").forEach(el => el.onclick = () => openGlyph(el.dataset.char));
 }
-async function refreshHand() {
+async function refreshHand(sid) {
   try {
     const page = S.doc ? Math.max(S.current, 0) : 0;
-    const r = await call("hand_summary", page);
+    const r = await call("hand_summary", page, sid == null ? null : sid);
     if (S.doc && page !== Math.max(S.current, 0)) return;   // the user moved on meanwhile
-    applyHand(r.hand);
+    S.style = r.selected;
+    applyHand(r);
     updateLearning(r.learning);
-    S.handHeight = r.height;
+    if (S.pages[page]) drawOverlay(S.pages[page]);
   } catch (e) { /* no document yet */ }
+}
+function renderWritings(styles, selected) {
+  const box = $("#writingList");
+  $("#handPageLabel").textContent = S.doc ? `· pagina ${S.current + 1}` : "";
+  if (!styles.length) {
+    box.innerHTML = `<div class="empty small">Analizza la pagina: Calamo separa le scritture di persone diverse e lo stampato.</div>`;
+    return;
+  }
+  box.innerHTML = styles.map(st => `<button class="wchip${st.id === selected ? " active" : ""}" data-id="${st.id}" style="--c:${st.color}"
+    title="${st.kind === "print" ? "Testo stampato" : "Scritto a mano"} · ${st.lines} righe · ${st.glyphs} caratteri"><i></i>${esc(st.name)}<small>${st.lines}</small></button>`).join("");
+  $$(".wchip", box).forEach(b => b.onclick = () => { S.style = +b.dataset.id; refreshHand(S.style); });
 }
 async function applyStyle(name) {
   await guarded(async () => {
-    const r = await call("load_style", S.current, name);
-    applyHand(r.hand);
-    S.handHeight = r.height;
-    toast(name ? `Uso “${name}” sulla pagina ${S.current + 1} per le lettere che mancano.` : "Calligrafia ricordata tolta da questa pagina.", "ok");
+    const r = await call("load_style", S.current, S.style, name);
+    applyHand(r);
+    toast(name ? `“${name}” completa le lettere mancanti di questa scrittura.` : "Calligrafia ricordata tolta.", "ok");
   });
 }
 function renderStyles(list) {
@@ -936,7 +1000,8 @@ async function openGlyph(ch) {
   await guarded(async () => {
     S.glyphChar = ch;
     S.glyphPage = S.current;
-    renderGlyphVariants(await call("glyph_variants", S.glyphPage, ch));
+    S.glyphStyle = S.style;
+    renderGlyphVariants(await call("glyph_variants", S.glyphPage, S.glyphStyle, ch));
     $("#glyphModal").hidden = false;
   });
 }
@@ -948,8 +1013,8 @@ function renderGlyphVariants(list) {
   box.innerHTML = list.map(v => `<div class="glyph${v.kind === "manual" ? " manual" : ""}"><img src="${v.img}">
     <button data-kind="${v.kind}" data-i="${v.i}" title="Elimina questo esempio"><svg><use href="#i-trash"/></svg></button></div>`).join("");
   $$("button", box).forEach(b => b.onclick = () => guarded(async () => {
-    const r = await call("delete_glyph", S.glyphPage, ch, b.dataset.kind, +b.dataset.i);
-    applyHand(r.hand, S.glyphPage);
+    const r = await call("delete_glyph", S.glyphPage, S.glyphStyle, ch, b.dataset.kind, +b.dataset.i);
+    applyHand(r, S.glyphPage);
     renderGlyphVariants(r.variants);
   }));
 }
@@ -1111,10 +1176,7 @@ const LETTER_COMMANDS = {
       const r = await call("teach_letters", page, id, L.segs, $("#lettersUpdateText").checked);
       $("#lettersModal").hidden = true;
       L.data = null;
-      S.inkCache[page] = r.ink;
-      const P = S.pages[page];
-      if (P.data) { P.data.ink = r.ink; drawOverlay(P); }
-      applyHand(r.hand, page);
+      applyInkResult(page, r);
       updateLearning(r.stats);
       renderInkList();
       toast(`Salvate ${r.stored} lettere e numeri nella calligrafia della pagina ${page + 1}.`, "ok");
@@ -1242,11 +1304,18 @@ const COMMANDS = {
   checkUpdate: () => checkUpdate(true),
   tutorial: () => startTour(),
   saveStyle: async () => {
-    if (!S.glyphCount) return toast("Questa pagina non ha ancora lettere apprese: analizzala o segna le lettere prima.", "warn");
-    const name = await modal("Ricorda questa calligrafia", `Dai un nome alla calligrafia della pagina ${S.current + 1} (per esempio chi l'ha scritta). Potrai usarla su altre pagine o documenti quando vuoi.`,
-      [["Annulla", false, "ghost"], ["Ricorda", true, "primary"]], "");
+    if (!S.glyphCount) return toast("Questa scrittura non ha ancora lettere apprese: analizza la pagina o segna le lettere prima.", "warn");
+    const name = await modal("Ricorda questa scrittura", `Dai un nome a “${$("#styleName").textContent}” (per esempio chi l'ha scritta). Potrai usarla su altre pagine o documenti quando vuoi.`,
+      [["Annulla", false, "ghost"], ["Ricorda", true, "primary"]], $("#styleName").textContent.replace(/^(Scrittura|Stampato) \d+$/, ""));
     if (!name) return;
-    await guarded(async () => { renderStyles(await call("save_style", S.current, name)); toast(`Calligrafia “${name}” ricordata.`, "ok"); });
+    await guarded(async () => { renderStyles(await call("save_style", S.current, S.style, name)); toast(`Calligrafia “${name}” ricordata.`, "ok"); });
+  },
+  renameStyle: async () => {
+    if (S.style == null) return;
+    const name = await modal("Rinomina la scrittura", "Per esempio il nome di chi ha scritto, o “Stampato del verbale”.",
+      [["Annulla", false, "ghost"], ["Rinomina", true, "primary"]], $("#styleName").textContent);
+    if (!name) return;
+    await guarded(async () => applyInkResult(S.current, await call("rename_style", S.current, S.style, name)));
   },
   styleMenu: async () => {
     const menu = $("#styleMenu");
@@ -1360,11 +1429,11 @@ const TOUR = [
   { icon: "i-edit", title: "Modifica il testo", keys: ["M"],
     text: "Con lo strumento Modifica clicca una frase e riscrivila sul posto: font, dimensione e colore restano quelli originali. Ctrl+Invio applica, Esc annulla." },
   { icon: "i-sparkle", title: "Leggi la scrittura a mano",
-    text: "Premi “Leggi scrittura”. Le righe scritte a mano sono evidenziate in blu, quelle stampate in grigio (non vengono usate per la calligrafia), quelle dubbie in rosso con un “?”." },
+    text: "Premi “Leggi scrittura”. Le righe scritte a mano sono colorate (un colore per persona), quelle stampate in grigio, quelle dubbie in rosso con un “?”, e l'inchiostro che non riesce a leggere in arancione: cliccalo e scrivi cosa c'è." },
   { icon: "i-letters", title: "Correggi e segna le lettere",
     text: "Clicca una riga per correggerne la lettura. Con “Segna lettere” indichi dove si trova ogni lettera e numero, così la calligrafia della pagina diventa più completa." },
-  { icon: "i-layers", title: "Una calligrafia per pagina",
-    text: "Ogni pagina può essere scritta da una persona diversa, quindi ognuna ha la sua calligrafia. Se vuoi riusarne una, premi “Ricorda…” e poi, su un'altra pagina o documento, “Usa una ricordata”." },
+  { icon: "i-layers", title: "Ogni scrittura con le sue lettere",
+    text: "Sulla stessa pagina possono scrivere più persone: Calamo le separa (un colore per persona) e tiene a parte lo stampato. Ogni riga viene riscritta solo con le lettere della sua scrittura; se ha sbagliato, scegli la scrittura giusta nel riquadro della riga. “Ricorda…” la salva per altre pagine o documenti." },
   { icon: "i-pen", title: "Scrivi con la tua calligrafia", keys: ["H"],
     text: "Con lo strumento A mano clicca un punto vuoto della pagina e scrivi, oppure clicca una scritta esistente per riscriverla: il testo viene composto con le lettere della pagina, nello stesso inchiostro. Poi salva o esporta in Word ed Excel." },
   { icon: "i-download", title: "Sempre aggiornato",

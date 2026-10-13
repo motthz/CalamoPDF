@@ -6,6 +6,7 @@
 * Every correction the user makes is remembered and re-applied automatically.
 """
 import asyncio
+import io
 import re
 import threading
 
@@ -13,6 +14,7 @@ import numpy as np
 import pymupdf as fitz
 
 from .storage import load_json, save_json
+from .writers import line_features, unread_lines
 
 OCR_DPI = 300
 _ocr_lock = threading.Lock()
@@ -143,21 +145,66 @@ def _native_rects(page):
         if b.get("type") != 0:
             continue
         for l in b["lines"]:
-            if "".join(s["text"] for s in l["spans"]).strip():
+            # invisible text (scanners' OCR layer) does not hide the ink: it must still be read
+            if "".join(s["text"] for s in l["spans"] if s.get("alpha", 255) > 0).strip():
                 rects.append(fitz.Rect(l["bbox"]) * page.rotation_matrix)   # as displayed, like the OCR
     return rects
 
 
+def enhance(rgb):
+    """Second look for the OCR: flatten an uneven scan background (shadows of phone scans,
+    yellowed paper) and stretch the contrast, so faint pencil and thin pen read better."""
+    from PIL import Image
+    gray = (0.299 * rgb[:, :, 0] + 0.587 * rgb[:, :, 1] + 0.114 * rgb[:, :, 2]).astype(np.float32)
+    k = 16
+    h, w = gray.shape
+    small = gray[: h // k * k, : w // k * k].reshape(h // k, k, w // k, k).max(axis=(1, 3))
+    bg = small.copy()
+    for dy in (-1, 0, 1):                                   # 3x3 max filter on the small image
+        for dx in (-1, 0, 1):
+            bg = np.maximum(bg, np.roll(np.roll(small, dy, 0), dx, 1))
+    bg = np.repeat(np.repeat(bg, k, 0), k, 1)
+    bg = np.pad(bg, ((0, h - bg.shape[0]), (0, w - bg.shape[1])), mode="edge")
+    norm = np.clip(gray / np.maximum(bg, 1) * 255, 0, 255)
+    # darkest ink -> black, paper -> white (on an almost empty page the darkest 0.5% is paper)
+    lo = min(float(np.percentile(norm, 0.5)), 180.0)
+    out = np.clip((norm - lo) / max(245 - lo, 1), 0, 1) ** 1.5 * 255
+    buf = io.BytesIO()
+    Image.fromarray(out.astype(np.uint8)).save(buf, "PNG")
+    return buf.getvalue()
+
+
+def _merge_passes(first, second):
+    """Words of the second reading that the first one missed, grouped in their lines."""
+    boxes = [w["box"] for line in first for w in line]
+
+    def seen(b):
+        cx, cy = (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
+        return any(o[0] - 2 <= cx <= o[2] + 2 and o[1] - 2 <= cy <= o[3] + 2 for o in boxes)
+    extra = []
+    for line in second:
+        new = [w for w in line if not seen(w["box"])]
+        if new:
+            extra.append(new)
+    return first + extra
+
+
 def analyze_page(page, learning, lang_tag=None, include_native=False):
     """OCR a page and return 'ink' lines: text that exists only as pixels.
-    Every line gets a 'kind': "hand" (handwritten) or "print" (scanned print)."""
+    Two readings (as scanned, and with flattened background / stronger contrast) are merged;
+    ink that neither reading understood comes back as "unread" lines for the user to read.
+    Every line carries its measured features ('feat') and a first guess of 'kind'."""
     zoom = OCR_DPI / 72.0
     longest = max(page.rect.width, page.rect.height) * zoom
     if longest > 9800:
         zoom *= 9800 / longest
     pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
-    raw_lines = windows_ocr(pix.tobytes("png"), lang_tag)
     rgb = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3]
+    raw_lines = windows_ocr(pix.tobytes("png"), lang_tag)
+    try:
+        raw_lines = _merge_passes(raw_lines, windows_ocr(enhance(rgb), lang_tag))
+    except Exception:
+        pass                                   # the second reading is a bonus
     native = [] if include_native else _native_rects(page)
 
     def is_native(r):
@@ -194,13 +241,25 @@ def analyze_page(page, learning, lang_tag=None, include_native=False):
         x1 = max(w["bbox"][2] for w in words)
         y1 = max(w["bbox"][3] for w in words)
         text, learned = learning.apply(raw)
-        score = hand_score(_crop(rgb, (x0, y0, x1, y1), zoom), raw)
         result.append({
             "bbox": [x0, y0, x1, y1], "raw": raw, "text": text, "words": words,
-            "source": "learned" if learned else "ocr", "doubt": _doubt(raw),
-            "synthetic": False, "kind": "hand" if score >= PRINT_BELOW else "print", "handScore": round(score, 2),
+            "source": "learned" if learned else "ocr", "doubt": _doubt(raw), "synthetic": False,
         })
-    _harmonize_kinds(result)
+    # ink nobody could read: show it, so the user can type what it says
+    try:
+        known = [w["bbox"] for l in result for w in l["words"]] + [list(n) for n in native]
+        half = rgb[::2, ::2]
+        for b in unread_lines(half, zoom / 2, known):
+            result.append({"bbox": b, "raw": "", "text": "", "words": [], "source": "unread",
+                           "doubt": 1.0, "synthetic": False})
+    except Exception:
+        pass
+    for l in result:
+        crop = _crop(rgb, l["bbox"], zoom)
+        score = hand_score(crop, l["raw"])
+        l["handScore"] = round(score, 2)
+        l["kind"] = "hand" if score >= PRINT_BELOW else "print"
+        l["feat"] = line_features(crop, l["bbox"][3] - l["bbox"][1], score)
     result.sort(key=lambda l: (round(l["bbox"][1] / 6), l["bbox"][0]))
     return result
 
@@ -337,7 +396,7 @@ def hand_score(rgb, text=""):
     colour = float(np.clip((chroma - 22) / 30, 0, 1))
 
     segs = _segments(ink, max(H * 0.08, 2))
-    n_chars = sum(1 for c in text if not c.isspace())
+    n_chars = sum(1 for c in text if not c.isspace()) or len(segs)    # unread line: one letter per block
     if len(segs) < 4 or n_chars < 4:
         return max(0.6, colour)           # too little evidence: keep it as handwriting
 
@@ -364,19 +423,3 @@ def hand_score(rgb, text=""):
     joined = float(np.clip((per_seg - 1.35) / 1.2, 0, 1))
     shape = 0.5 * base + 0.25 * top + 0.25 * joined
     return float(max(shape, 0.85 * joined, colour))
-
-
-def _harmonize_kinds(lines):
-    """Lines of almost the same height, aligned to the same left margin and
-    classified mostly as print are a printed paragraph: borderline ones follow."""
-    prints = [l for l in lines if l["kind"] == "print"]
-    if len(prints) < 2:
-        return
-    for l in lines:
-        if l["kind"] != "hand" or l["handScore"] > PRINT_BELOW + 0.12:
-            continue
-        h = l["bbox"][3] - l["bbox"][1]
-        same = sum(1 for p in prints if abs((p["bbox"][3] - p["bbox"][1]) - h) < h * 0.08
-                   and abs(p["bbox"][0] - l["bbox"][0]) < h * 0.5)
-        if same >= 2:
-            l["kind"] = "print"

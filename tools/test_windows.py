@@ -94,6 +94,78 @@ def test_rotated_page_edit():
         check(f"rotation {rot}: nothing written elsewhere", ink_share(elsewhere) < 0.001, f"{ink_share(elsewhere):.4f}")
 
 
+def test_writings():
+    """A scanned page with print and two people's handwriting: every line must land in
+    the writing of its author, and rewriting must keep size, baseline and letters."""
+    import io
+    import numpy as np
+    import pymupdf as fitz
+    from PIL import Image, ImageDraw, ImageFilter, ImageFont
+    from engine.document import Session
+    from engine.handwriting import measure_line
+    fonts = os.path.join(os.environ["WINDIR"], "Fonts")
+    rows = [("print", "times.ttf", 44, (20, 20, 20), "Il budget approvato resta invariato"),
+            ("print", "times.ttf", 44, (20, 20, 20), "Presenti tutti i responsabili di area"),
+            ("print", "times.ttf", 44, (20, 20, 20), "Totale previsto per il trimestre"),
+            ("A", "Inkfree.ttf", 60, (25, 40, 140), "Consegna entro venerdi"),
+            ("A", "Inkfree.ttf", 60, (25, 40, 140), "Firmato Giulia Rossi"),
+            ("B", "segoesc.ttf", 54, (170, 25, 25), "Visto e approvato"),
+            ("B", "segoesc.ttf", 54, (170, 25, 25), "Marco Bianchi")]
+    W, H = 1654, 2339
+    scan = Image.new("RGB", (W, H), (247, 246, 241))
+    d = ImageDraw.Draw(scan)
+    y, truth = 200, []
+    for who, f, size, col, text in rows:
+        font = ImageFont.truetype(os.path.join(fonts, f), size)
+        d.text((180, y), text, font=font, fill=col)
+        truth.append((who, text, y * 72 / 200))
+        y += int(size * 2.1)
+    scan = scan.filter(ImageFilter.GaussianBlur(0.7))
+    buf = io.BytesIO()
+    scan.save(buf, "JPEG", quality=85)
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    page.insert_image(page.rect, stream=buf.getvalue())
+    path = os.path.join(tempfile.mkdtemp(), "writings.pdf")
+    doc.save(path)
+    s = Session()
+    s.open(path)
+    r = s.analyze(0)
+    names = {st["id"]: st for st in r["styles"]}
+    found = {}
+    for l in r["ink"]:
+        who = min(truth, key=lambda t: abs(t[2] - l["bbox"][1]))[0]
+        found.setdefault(who, []).append(l)
+        print(f"   {who:5} -> {names[l['style']]['name']:12} [{l['kind']}] {l['source']}: {l['text']}")
+    for who in ("print", "A", "B"):
+        check(f"writings: lines of {who} found", bool(found.get(who)))
+    if not all(found.get(w) for w in ("print", "A", "B")):
+        return
+    sid = {w: {l["style"] for l in found[w]} for w in found}
+    check("writings: print kept together and printed", len(sid["print"]) == 1
+          and all(l["kind"] == "print" for l in found["print"]), str(sid["print"]))
+    check("writings: the two people are not mixed", not (sid["A"] & sid["B"]) and not (sid["print"] & (sid["A"] | sid["B"])),
+          f"A={sid['A']} B={sid['B']}")
+    check("writings: handwriting recognised as handwriting",
+          all(l["kind"] == "hand" for l in found["A"] + found["B"]))
+    # rewrite a printed line: same baseline and size as the original
+    pl = found["print"][0]
+    base0, xh0 = measure_line(s.doc[0], pl["bbox"], pl["text"])
+    s.edit_ink(0, pl["id"], "Il budget approvato aumenta")
+    base1, xh1 = measure_line(s.doc[0], s.ink[0][pl["id"]]["bbox"], "Il budget approvato aumenta")
+    check("print rewrite: same baseline", abs(base1 - base0) < xh0 * 0.25, f"{base0:.1f} -> {base1:.1f}")
+    check("print rewrite: same size", abs(xh1 - xh0) < xh0 * 0.15, f"{xh0:.1f} -> {xh1:.1f}")
+    check("print rewrite: still searchable", bool(s.doc[0].search_for("aumenta")))
+    # rewrite a line of B: it must be drawn in B's ink colour (its own letters), not A's
+    bl = found["B"][0]
+    s.edit_ink(0, bl["id"], "Visto, approvato")
+    pix = s.doc[0].get_pixmap(clip=fitz.Rect(bl["bbox"]), dpi=144)
+    a = np.frombuffer(pix.samples, np.uint8).reshape(pix.h, pix.w, pix.n)[:, :, :3].astype(int)
+    ink = a[a.mean(axis=2) < 170]
+    red = len(ink) and (ink[:, 0] - ink[:, 2]).mean() > 40
+    check("handwriting rewrite: written with its own writer's ink", bool(red), f"{len(ink)} ink px")
+
+
 def _sha(p):
     with open(p, "rb") as f:
         return hashlib.sha256(f.read()).hexdigest()
@@ -146,7 +218,7 @@ def test_release_check():
 
 
 if __name__ == "__main__":
-    for t in (test_ocr, test_rotated_page_edit, test_portable_swap, test_setup_script, test_release_check):
+    for t in (test_ocr, test_writings, test_rotated_page_edit, test_portable_swap, test_setup_script, test_release_check):
         try:
             t()
         except Exception as e:

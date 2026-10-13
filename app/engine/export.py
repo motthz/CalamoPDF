@@ -30,9 +30,20 @@ def _inside(rect, rects):
 
 
 def _ink_lines(ink, pi):
-    """Recognised lines to export. A printed line already rewritten by Calamo is now real
-    text on the page, so it is exported with the page text, not a second time."""
-    return [l for l in ink.get(pi, []) if not (l.get("kind") == "print" and l.get("synthetic"))]
+    """Recognised lines to export (handwriting and scanned print, as read or rewritten)."""
+    return list(ink.get(pi, []))
+
+
+def _hidden_rects(page):
+    """Invisible text: a scanner's OCR layer or the searchable copy of rewritten print.
+    On a page Calamo has read, the recognised lines replace it in the export."""
+    out = []
+    for b in page.get_text("dict")["blocks"]:
+        for l in b.get("lines", []):
+            for s in l["spans"]:
+                if s["text"].strip() and s.get("alpha", 255) == 0:
+                    out.append(fitz.Rect(s["bbox"]))
+    return out
 
 
 # --------------------------------------------------------------------------- Word
@@ -63,6 +74,11 @@ def to_docx(doc, ink, path, progress=None):
             if b["type"] == 0:
                 if _inside(r, trects):
                     continue
+                if ink.get(pi):
+                    b = dict(b, lines=[dict(l, spans=[s for s in l["spans"] if s.get("alpha", 255) > 0])
+                                       for l in b["lines"]])
+                    if not any(s["text"].strip() for l in b["lines"] for s in l["spans"]):
+                        continue
                 items.append((r.y0, r.x0, "text", b))
             elif b["type"] == 1 and b.get("image") and r.width > 8 and r.height > 8:
                 items.append((r.y0, r.x0, "image", b))
@@ -179,6 +195,9 @@ def _cell_value(v):
 def _layout_rows(page, ink_lines):
     """No ruled tables: rebuild a grid from word positions."""
     words = page.get_text("words")
+    if ink_lines:
+        hidden = _hidden_rects(page)
+        words = [w for w in words if not _inside(fitz.Rect(w[:4]), hidden)]
     items = [(w[0], w[1], w[2], w[3], w[4]) for w in words]
     for l in ink_lines:
         items.append((l["bbox"][0], l["bbox"][1], l["bbox"][2], l["bbox"][3], l["text"]))

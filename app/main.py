@@ -24,7 +24,7 @@ from engine.ocr import available_languages  # noqa: E402
 from engine.storage import load_json, save_json  # noqa: E402
 import updater  # noqa: E402
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 _user32 = ctypes.windll.user32
 _user32.FindWindowW.restype = wintypes.HWND
@@ -384,20 +384,29 @@ class Api:
         return self._s.teach_letters(index, line_id, segments, update_text)
 
     @safe
-    def glyph_variants(self, index, char):
-        return self._s.hand(index).variants(char)
+    def set_line_style(self, index, line_id, sid):
+        return self._s.set_line_style(index, line_id, sid)
 
     @safe
-    def delete_glyph(self, index, char, kind, i):
-        h = self._s.hand(index)
-        h.delete_variant(char, kind, i)
-        return {"hand": h.summary(), "variants": h.variants(char)}
+    def rename_style(self, index, sid, name):
+        return self._s.rename_style(index, sid, name)
 
     @safe
-    def forget_letters(self, index):
-        h = self._s.hand(index)
-        h.forget_manual()
-        return h.summary()
+    def glyph_variants(self, index, sid, char):
+        return self._s._lib(index, sid).variants(char)
+
+    @safe
+    def delete_glyph(self, index, sid, char, kind, i):
+        lib = self._s._lib(index, sid)
+        lib.delete_variant(char, kind, i)
+        lib._font = None
+        return {**self._s.hand_info(index, lib.sid), "variants": lib.variants(char)}
+
+    @safe
+    def forget_letters(self, index, sid):
+        lib = self._s._lib(index, sid)
+        lib.forget_manual()
+        return self._s.hand_info(index, lib.sid)
 
     # calligraphies saved by name, used only when the user picks one
     @safe
@@ -405,12 +414,12 @@ class Api:
         return HW.style_list()
 
     @safe
-    def save_style(self, index, name):
-        return self._s.save_style(index, name)
+    def save_style(self, index, sid, name):
+        return self._s.save_style(index, sid, name)
 
     @safe
-    def load_style(self, index, name):
-        return self._s.load_style(index, name)
+    def load_style(self, index, sid, name):
+        return self._s.load_style(index, sid, name)
 
     @safe
     def delete_style(self, name):
@@ -426,22 +435,23 @@ class Api:
         return self._s.ink_crop(index, line_id)
 
     @safe
-    def preview_hand(self, index, text, height=None, color=None):
-        return self._s.preview_hand(index, text, height, color)
+    def preview_hand(self, index, text, height=None, color=None, sid=None, line_id=None):
+        return self._s.preview_hand(index, text, height, color, sid, line_id)
 
     @safe
     def edit_ink(self, index, line_id, text, color=None):
         return self._s.edit_ink(index, line_id, text, color)
 
     @safe
-    def add_hand(self, index, x, y, text, height=None, color=None):
-        return self._s.add_hand(index, x, y, text, height, color)
+    def add_hand(self, index, x, y, text, height=None, color=None, sid=None):
+        return self._s.add_hand(index, x, y, text, height, color, sid)
 
     @safe
-    def hand_summary(self, index=0):
+    def hand_summary(self, index=0, sid=None):
         if not self._s.doc:
-            return {"hand": HW.HandwritingLibrary().summary(), "height": 14.0, "learning": self._s.learning.stats()}
-        return self._s.hand_info(index)
+            return {"styles": [], "selected": None, "hand": HW.HandwritingLibrary().summary(), "height": 14.0,
+                    "learning": self._s.learning.stats()}
+        return self._s.hand_info(index, sid)
 
     @safe
     def reset_learning(self):
