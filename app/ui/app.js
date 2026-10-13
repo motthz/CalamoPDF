@@ -109,6 +109,8 @@ window.addEventListener("pywebviewready", async () => {
   fillSelect($("#ocrLang"), [["", "Lingua del sistema"], ...b.languages.map(l => [l, l])]);
   $("#ocrLang").value = S.settings.ocrLang || "";
   $("#autoUpdate").checked = S.settings.autoUpdate !== false;
+  $("#handModel").checked = S.settings.handModel !== false;
+  refreshModel();
   $("#about").textContent = `Calamo PDF Studio ${b.version}`;
   S.version = b.version;
   renderRecent(b.recent);
@@ -164,6 +166,8 @@ async function confirmDiscard() {
 
 function loadDoc(info) {
   closeEditor(false); closePop();
+  S.docGen = (S.docGen || 0) + 1;
+  if (reading) { reading.cancelled = true; call("cancel_analysis").catch(() => {}); }
   S.doc = info;
   S.inkCache = {};
   S.hits = []; S.hitIdx = -1;
@@ -718,7 +722,8 @@ function setKindSwitch(line) {
   $("#inkLetters").disabled = !!line.synthetic;
 }
 function setSrcBadge(el, l) {
-  const map = { ocr: ["OCR", "src-ocr"], learned: ["Appreso", "src-learned"], user: ["Tu", "src-user"] };
+  const map = { ocr: ["OCR", "src-ocr"], learned: ["Appreso", "src-learned"], user: ["Tu", "src-user"],
+               model: ["Lettore", "src-model"] };
   let [t, c] = map[l.source] || map.ocr;
   if (isDoubt(l)) { t = "Da verificare"; c = "src-doubt"; }
   if (l.kind === "print" && !l.synthetic) { t = "Stampato"; c = "src-print"; }
@@ -796,7 +801,9 @@ async function teach(page, id, text) {
   applyInkResult(page, r);
   updateLearning(r.stats);
   renderInkList();
-  toast(r.learned ? "Grazie! Ho imparato la correzione e la userò d'ora in poi." : "Lettura aggiornata.", "ok");
+  const n = (r.propagated || []).length;
+  toast((r.learned ? "Grazie! Ho imparato la correzione e la userò d'ora in poi." : "Lettura aggiornata.") +
+        (n ? ` L'ho applicata anche ${n === 1 ? "a un'altra riga" : `ad altre ${n} righe`} della stessa scrittura.` : ""), "ok");
 }
 $("#inkApply").onclick = async () => {
   const p = S.pop;
@@ -890,24 +897,50 @@ function flashInk(page, id) {
   const el = $(`.ink[data-id="${id}"]`, S.pages[page].overlay);
   if (el) { el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash"); }
 }
+// reading runs in the background, page by page: the user keeps working meanwhile
+let reading = null;
+function taskBar(text, frac) {
+  $("#stTask").hidden = text === false;
+  if (text === false) return;
+  $("#stTaskText").textContent = text;
+  $("#stTaskBar").style.width = Math.round((frac || 0) * 100) + "%";
+}
+$("#stTaskCancel").onclick = async () => {
+  if (!reading) return;
+  reading.cancelled = true;
+  taskBar("Interruzione…", reading.frac);
+  try { await call("cancel_analysis"); } catch (e) { /* already finished */ }
+};
 async function analyze(all) {
   if (!S.doc) return;
+  if (reading) { toast("Sto già leggendo: aspetta che finisca o interrompi la lettura.", ""); return; }
+  const doc = S.docGen;
   const pages = all ? S.pages.map(P => P.i) : [S.current];
-  let found = 0;
+  const job = reading = { cancelled: false, frac: 0 };
+  let found = 0, done = 0;
+  const skipped = [];
   try {
-    for (let k = 0; k < pages.length; k++) {
+    for (let k = 0; k < pages.length && !job.cancelled; k++) {
       const i = pages[k];
-      busy(all ? `Lettura della pagina ${i + 1} di ${S.pages.length}…` : "Lettura della pagina…", all ? k / pages.length : null);
-      const r = await call("analyze", i);
-      S.inkCache[i] = r.ink;
+      job.frac = k / pages.length;
+      taskBar(all ? `Lettura pagina ${i + 1} (${k + 1} di ${pages.length})…` : `Lettura della pagina ${i + 1}…`, job.frac);
+      let r;
+      try { r = await call("analyze", i); }
+      catch (e) {
+        if (job.cancelled || !S.doc || S.docGen !== doc) break;
+        if (/modificata durante la lettura/.test(e.message)) { skipped.push(i + 1); continue; }
+        throw e;
+      }
+      if (!S.doc || S.docGen !== doc) break;
+      done++;
+      applyInkResult(i, r);
       found += r.ink.length;
-      const P = S.pages[i];
-      if (P.data) { P.data.ink = r.ink; drawOverlay(P); }
-      if (P.data) P.data.styles = r.styles;
-      applyHand(r, i);
     }
-    S.doc = await call("info");
+    if (!S.doc || S.docGen !== doc) return;
+    updateInfo(await call("info"));
     renderInkList();
+    if (job.cancelled) { toast(`Lettura interrotta: ${done} ${done === 1 ? "pagina letta" : "pagine lette"}.`, ""); return; }
+    if (skipped.length) toast(`Hai modificato ${skipped.length === 1 ? "la pagina " : "le pagine "}${skipped.join(", ")} durante la lettura: rileggi${skipped.length === 1 ? "la" : "le"} quando vuoi.`, "");
     if (!found) toast("Non ho trovato scrittura a mano o testo scansionato.", "");
     else {
       const all = Object.values(S.inkCache).flat();
@@ -918,7 +951,8 @@ async function analyze(all) {
       if (S.tool !== "edit") setTool("edit");
       $$("#tabs button")[0].click();
     }
-  } catch (e) { toast(e.message, "err"); } finally { busy(false); }
+  } catch (e) { if (!job.cancelled) toast(e.message, "err"); }
+  finally { if (reading === job) { reading = null; taskBar(false); } }
 }
 function applyHand(info, page) {
   // the panel shows the writings of the current page, and the letters of the selected one
@@ -1355,6 +1389,33 @@ function saveSetting(k, v) { S.settings[k] = v; call("set_settings", { [k]: v })
 $$("#themeSwitch button").forEach(b => b.onclick = () => { applyTheme(b.dataset.theme); saveSetting("theme", b.dataset.theme); });
 $("#ocrLang").onchange = e => saveSetting("ocrLang", e.target.value);
 $("#autoUpdate").onchange = e => saveSetting("autoUpdate", e.target.checked);
+$("#handModel").onchange = e => { saveSetting("handModel", e.target.checked); refreshModel(); };
+
+// the dedicated handwriting reader: downloaded once, on request
+let modelPoll = null;
+async function refreshModel() {
+  let m;
+  try { m = await call("model_status"); } catch (e) { return; }
+  const act = $("#modelAction"), st = $("#modelStatus"), bar = $("#modelBar");
+  bar.hidden = !m.downloading;
+  bar.firstElementChild.style.width = Math.round((m.progress || 0) * 100) + "%";
+  act.hidden = m.downloading || (m.installed && !m.error) || !m.runtime;
+  act.lastChild.textContent = m.error ? " Scarica di nuovo" : " Scarica il lettore";
+  st.textContent = !m.runtime ? "Non disponibile in questa installazione."
+    : m.downloading ? `Download… ${Math.round((m.progress || 0) * 100)}%`
+    : m.error ? m.error
+    : m.installed ? (m.enabled ? "Pronto: lo uso quando leggo le pagine." : "Scaricato, ma disattivato.")
+    : "Non ancora scaricato.";
+  clearTimeout(modelPoll);
+  if (m.downloading) modelPoll = setTimeout(refreshModel, 600);
+  else if (S.modelWasDownloading && m.installed && !m.error) toast("Lettore della scrittura a mano pronto.", "ok");
+  S.modelWasDownloading = m.downloading;
+}
+$("#modelAction").onclick = async () => {
+  try { await call("model_download"); } catch (e) { toast(e.message, "err"); }
+  S.modelWasDownloading = true;
+  refreshModel();
+};
 
 // window controls
 $$(".win-btn").forEach(b => b.onclick = async () => {

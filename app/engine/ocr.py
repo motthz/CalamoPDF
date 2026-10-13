@@ -151,11 +151,20 @@ def _native_rects(page):
     return rects
 
 
+def _gray(rgb):
+    """Luminance as uint8, with integer arithmetic (several times faster than floats)."""
+    r, g, b = rgb[:, :, 0].astype(np.uint16), rgb[:, :, 1].astype(np.uint16), rgb[:, :, 2].astype(np.uint16)
+    return ((r * 77 + g * 150 + b * 29) >> 8).astype(np.uint8)
+
+
+_GAMMA = (np.linspace(0, 1, 256) ** 1.5 * 255).astype(np.uint8)
+
+
 def enhance(rgb):
     """Second look for the OCR: flatten an uneven scan background (shadows of phone scans,
     yellowed paper) and stretch the contrast, so faint pencil and thin pen read better."""
     from PIL import Image
-    gray = (0.299 * rgb[:, :, 0] + 0.587 * rgb[:, :, 1] + 0.114 * rgb[:, :, 2]).astype(np.float32)
+    gray = _gray(rgb)
     k = 16
     h, w = gray.shape
     small = gray[: h // k * k, : w // k * k].reshape(h // k, k, w // k, k).max(axis=(1, 3))
@@ -163,15 +172,60 @@ def enhance(rgb):
     for dy in (-1, 0, 1):                                   # 3x3 max filter on the small image
         for dx in (-1, 0, 1):
             bg = np.maximum(bg, np.roll(np.roll(small, dy, 0), dx, 1))
-    bg = np.repeat(np.repeat(bg, k, 0), k, 1)
-    bg = np.pad(bg, ((0, h - bg.shape[0]), (0, w - bg.shape[1])), mode="edge")
-    norm = np.clip(gray / np.maximum(bg, 1) * 255, 0, 255)
+    # paper brightness of every pixel: upscale the small background image smoothly
+    bg = np.array(Image.fromarray(bg).resize((w, h), Image.BILINEAR), dtype=np.uint16)
+    norm = np.minimum(gray.astype(np.uint16) * 255 // np.maximum(bg, 1), 255).astype(np.uint8)
+    hist = np.cumsum(np.bincount(norm.ravel(), minlength=256))
+    lo = min(int(np.searchsorted(hist, hist[-1] * 0.005)), 180)
     # darkest ink -> black, paper -> white (on an almost empty page the darkest 0.5% is paper)
-    lo = min(float(np.percentile(norm, 0.5)), 180.0)
-    out = np.clip((norm - lo) / max(245 - lo, 1), 0, 1) ** 1.5 * 255
+    lut = _GAMMA[np.clip((np.arange(256) - lo) * 255 // max(245 - lo, 1), 0, 255)]
     buf = io.BytesIO()
-    Image.fromarray(out.astype(np.uint8)).save(buf, "PNG")
+    Image.fromarray(lut[norm]).save(buf, "PNG", compress_level=1)
     return buf.getvalue()
+
+
+# --------------------------------------------------------------------------- straightening
+def skew_angle(rgb):
+    """Tilt of the text lines in degrees (positive = lines go down to the right), from the
+    angle that makes the horizontal ink profile sharpest. 0 when the page is straight."""
+    gray = _gray(rgb[::4, ::4])
+    ink = gray < min(int(np.percentile(gray, 92)) - 40, 160)
+    ys, xs = np.nonzero(ink)
+    if len(xs) < 300:
+        return 0.0
+    if len(xs) > 60000:
+        pick = np.random.default_rng(0).choice(len(xs), 60000, replace=False)
+        ys, xs = ys[pick], xs[pick]
+    xs = xs - xs.mean()
+
+    def sharpness(a):
+        t = np.tan(np.radians(a))
+        prof = np.bincount(np.round(ys - xs * t - (ys - xs * t).min()).astype(int))
+        return float((prof.astype(np.float64) ** 2).sum())
+    best = max(np.arange(-6, 6.01, 0.5), key=sharpness)
+    best = max(np.arange(best - 0.5, best + 0.501, 0.1), key=sharpness)
+    return float(best) if abs(best) >= 0.3 else 0.0
+
+
+def straighten(rgb, angle):
+    """The page image turned so its lines are horizontal, and a function mapping boxes
+    found on it back to the original image."""
+    from PIL import Image
+    h, w = rgb.shape[:2]
+    img = Image.fromarray(np.ascontiguousarray(rgb)).rotate(angle, resample=Image.BICUBIC, fillcolor=(255, 255, 255))
+    cx, cy = w / 2.0, h / 2.0
+    c, s_ = np.cos(np.radians(angle)), np.sin(np.radians(angle))
+
+    def back(box):
+        x0, y0, x1, y1 = box
+        pts = []
+        for x, y in ((x0, y0), (x1, y0), (x0, y1), (x1, y1)):
+            dx, dy = x - cx, y - cy
+            # PIL turns the image counter-clockwise by `angle`: undo it
+            pts.append((cx + dx * c - dy * s_, cy + dx * s_ + dy * c))
+        xs_, ys_ = [p[0] for p in pts], [p[1] for p in pts]
+        return (min(xs_), min(ys_), max(xs_), max(ys_))
+    return np.array(img), back
 
 
 def _merge_passes(first, second):
@@ -189,23 +243,55 @@ def _merge_passes(first, second):
     return first + extra
 
 
-def analyze_page(page, learning, lang_tag=None, include_native=False):
-    """OCR a page and return 'ink' lines: text that exists only as pixels.
-    Two readings (as scanned, and with flattened background / stronger contrast) are merged;
-    ink that neither reading understood comes back as "unread" lines for the user to read.
-    Every line carries its measured features ('feat') and a first guess of 'kind'."""
+def prepare_page(page, include_native=False):
+    """Everything the reading needs from the document (taken under the document lock):
+    the page image and where the digital text is. The reading itself runs without it."""
     zoom = OCR_DPI / 72.0
     longest = max(page.rect.width, page.rect.height) * zoom
     if longest > 9800:
         zoom *= 9800 / longest
     pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
-    rgb = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3]
-    raw_lines = windows_ocr(pix.tobytes("png"), lang_tag)
+    rgb = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3].copy()
+    native = [] if include_native else [list(r) for r in _native_rects(page)]
+    return {"rgb": rgb, "png": pix.tobytes("png"), "zoom": zoom, "native": native}
+
+
+def analyze_page(page, learning, lang_tag=None, include_native=False, reader=None, lexicon=None, prefer=None):
+    return read_page(prepare_page(page, include_native), learning, lang_tag, reader, lexicon, prefer)
+
+
+def _png(arr):
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.fromarray(arr).save(buf, "PNG", compress_level=1)
+    return buf.getvalue()
+
+
+def read_page(job, learning, lang_tag=None, reader=None, lexicon=None, prefer=None, cancelled=None):
+    """Read a prepared page: 'ink' lines, i.e. text that exists only as pixels.
+    * a tilted scan is straightened for the OCR (the boxes are mapped back);
+    * two OCR readings (as scanned, and with flattened background) are merged;
+    * handwritten lines are also read by the dedicated model (reader), and the reading
+      that makes most sense in Italian (lexicon) is kept;
+    * ink nobody could read comes back as "unread" lines for the user to read.
+    Every line carries its measured features ('feat') and a first guess of 'kind'."""
+    rgb, zoom = job["rgb"], job["zoom"]
+    native = [fitz.Rect(r) for r in job["native"]]
+    angle = skew_angle(rgb)
+    if angle:
+        img, back = straighten(rgb, angle)
+        png = _png(img)
+    else:
+        img, back, png = rgb, None, job["png"]
+    raw_lines = windows_ocr(png, lang_tag)
     try:
-        raw_lines = _merge_passes(raw_lines, windows_ocr(enhance(rgb), lang_tag))
+        raw_lines = _merge_passes(raw_lines, windows_ocr(enhance(img), lang_tag))
     except Exception:
         pass                                   # the second reading is a bonus
-    native = [] if include_native else _native_rects(page)
+    if back:
+        for words in raw_lines:
+            for w in words:
+                w["box"] = back(w["box"])
 
     def is_native(r):
         c = fitz.Point((r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2)
@@ -244,11 +330,8 @@ def analyze_page(page, learning, lang_tag=None, include_native=False):
         y0 = min(w["bbox"][1] for w in words)
         x1 = max(w["bbox"][2] for w in words)
         y1 = max(w["bbox"][3] for w in words)
-        text, learned = learning.apply(raw)
-        result.append({
-            "bbox": [x0, y0, x1, y1], "raw": raw, "text": text, "words": words,
-            "source": "learned" if learned else "ocr", "doubt": _doubt(raw), "synthetic": False,
-        })
+        result.append({"bbox": [x0, y0, x1, y1], "raw": raw, "text": raw, "words": words,
+                       "source": "ocr", "doubt": _doubt(raw), "synthetic": False})
     # ink nobody could read: show it, so the user can type what it says
     try:
         known = [w["bbox"] for l in result for w in l["words"]] + [list(n) for n in native]
@@ -264,8 +347,86 @@ def analyze_page(page, learning, lang_tag=None, include_native=False):
         l["handScore"] = round(score, 2)
         l["kind"] = "hand" if score >= PRINT_BELOW else "print"
         l["feat"] = line_features(crop, l["bbox"][3] - l["bbox"][1], score)
+        if cancelled and cancelled():
+            raise RuntimeError("Lettura annullata.")
+        if l["kind"] == "hand":
+            _second_opinion(l, crop, zoom, reader, lexicon, prefer)
+        text, learned = learning.apply(l["raw"])
+        l["text"] = text
+        if learned:
+            l["source"] = "learned"
     result.sort(key=lambda l: (round(l["bbox"][1] / 6), l["bbox"][0]))
     return result
+
+
+def _second_opinion(line, crop, zoom, reader, lexicon, prefer):
+    """For a handwritten line, compare the OCR reading with the dedicated model's and with
+    their dictionary corrections, and keep the one that makes most sense in Italian."""
+    options = []
+    if line["raw"]:
+        options.append((line["raw"], "ocr", None))
+    if reader is not None:
+        try:
+            text, conf = reader.read(crop)
+            if text:
+                options.append((text, "model", conf))
+        except Exception:
+            pass
+    if not options:
+        return
+    best, best_q = None, None
+    for text, src, conf in options:
+        fixed, n = lexicon.correct_text(text, prefer) if lexicon else (text, 0)
+        ratio = lexicon.ratio(fixed) if lexicon else 0.5
+        q = ratio - 0.06 * n + (0.2 * conf if conf is not None else 0.0)
+        if best_q is None or q > best_q:
+            best, best_q = (fixed, src, conf, ratio), q
+    text, src, conf, ratio = best
+    if line["source"] == "unread" and src == "model" and (conf or 0) < 0.3:
+        return                                  # the model is guessing: leave it unread
+    if text != line["raw"]:
+        line["words"] = _align_words(text, line, crop, zoom)
+        line["raw"] = text
+    line["source"] = src if src == "model" else line["source"]
+    doubt = _doubt(text)
+    if conf is not None:
+        doubt = max(doubt, 1 - conf) if src == "model" else doubt
+    if lexicon and ratio < 0.5:
+        doubt = max(doubt, 0.5)
+    line["doubt"] = round(min(doubt, 1.0), 2)
+
+
+def _align_words(text, line, crop, zoom):
+    """Word boxes for a new reading: the OCR boxes if the word count matches, else the
+    gaps between the words found on the image, else the whole line as one word."""
+    words = text.split()
+    old = line.get("words") or []
+    if len(old) == len(words):
+        return [dict(w, text=t) for w, t in zip(old, words)]
+    x0, y0, x1, y1 = line["bbox"]
+    if crop.size and len(words) > 1:
+        gray = crop.mean(axis=2)
+        ink = (gray < min(np.percentile(gray, 92) - 25, 200)).any(axis=0)
+        h = crop.shape[0]
+        runs, start = [], None
+        for x, on in enumerate(ink):
+            if on and start is None:
+                start = x
+            elif not on and start is not None:
+                runs.append([start, x])
+                start = None
+        if start is not None:
+            runs.append([start, len(ink)])
+        # merge letters into words until there are as many blocks as words
+        while len(runs) > len(words):
+            gaps = [runs[i + 1][0] - runs[i][1] for i in range(len(runs) - 1)]
+            i = int(np.argmin(gaps))
+            runs[i][1] = runs[i + 1][1]
+            del runs[i + 1]
+        if len(runs) == len(words) and min((runs[i + 1][0] - runs[i][1]) for i in range(len(runs) - 1)) > h * 0.12:
+            ox = x0 - 2 / zoom          # _crop adds 2 px on the left
+            return [{"text": t, "bbox": [ox + a / zoom, y0, ox + b / zoom, y1]} for t, (a, b) in zip(words, runs)]
+    return [{"text": text, "bbox": [x0, y0, x1, y1]}]
 
 
 # --------------------------------------------------------------------------- digits

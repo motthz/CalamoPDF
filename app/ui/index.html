@@ -260,6 +260,10 @@
         <div class="card form">
           <label>Lingua OCR<select id="ocrLang"></select></label>
           <p class="muted small">Il riconoscimento di base usa il motore OCR integrato in Windows e funziona offline.</p>
+          <label class="switch-row"><span>Lettore dedicato alla scrittura a mano</span><input type="checkbox" id="handModel" class="switch"></label>
+          <div class="row gap"><button class="btn ghost sm" id="modelAction" hidden><svg><use href="#i-download"/></svg>Scarica il lettore</button><span class="muted small" id="modelStatus"></span></div>
+          <div class="bar model-bar" id="modelBar" hidden><i></i></div>
+          <p class="muted small">Un modello che legge le righe scritte a mano molto meglio dell'OCR di Windows. Si scarica una sola volta (circa 60 MB), poi funziona offline sul tuo PC.</p>
         </div>
         <div class="section-title">Aggiornamenti</div>
         <div class="card form">
@@ -292,6 +296,7 @@
     <span class="st-sep"></span>
     <span id="stTool">Modifica</span>
     <span class="grow"></span>
+    <span class="st-task" id="stTask" hidden><span class="spinner xs"></span><span id="stTaskText"></span><span class="st-bar"><i id="stTaskBar"></i></span><button class="st-cancel" id="stTaskCancel" title="Interrompi la lettura">Interrompi</button></span>
     <span id="stMsg"></span>
   </footer>
 </div>

@@ -19,6 +19,7 @@ sys.path.insert(0, BASE)
 from engine import export  # noqa: E402
 from engine import fonts as F  # noqa: E402
 from engine import handwriting as HW  # noqa: E402
+from engine.handreader import READER  # noqa: E402
 from engine.document import Session  # noqa: E402
 from engine.ocr import available_languages  # noqa: E402
 from engine.storage import load_json, save_json  # noqa: E402
@@ -40,7 +41,7 @@ class _MONITORINFO(ctypes.Structure):
     _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT), ("rcWork", wintypes.RECT),
                 ("dwFlags", wintypes.DWORD)]
 SETTINGS_DEFAULT = {"theme": "dark", "ocrLang": "", "recent": [], "tutorialDone": False, "autoUpdate": True,
-                    "updateTried": ""}
+                    "updateTried": "", "handModel": True}
 OBSOLETE_SETTINGS = ("aiKey", "useAi")
 
 
@@ -78,6 +79,8 @@ class Api:
         self._closing_ok = False
         self._max = False
         self._restore_rect = None
+        self._cancel_gen = 0             # bumped to stop the page readings in progress
+        self._model = {"downloading": False, "progress": 0.0, "error": None}
         self.startup_path = next((a for a in sys.argv[1:] if a.lower().endswith(".pdf") and os.path.exists(a)), None)
 
     # ---------------------------------------------------------------- helpers
@@ -367,9 +370,48 @@ class Api:
         return self._s.replace_all(term, repl)
 
     # ---------------------------------------------------------------- handwriting
+    def _reader(self):
+        if not self._settings.get("handModel", True) or not READER.installed() or not READER.runtime_ok():
+            return None
+        return READER
+
     @safe
     def analyze(self, index):
-        return self._s.analyze(index, self._settings.get("ocrLang") or None)
+        gen = self._cancel_gen
+        return self._s.analyze(index, self._settings.get("ocrLang") or None, reader=self._reader(),
+                               cancelled=lambda: gen != self._cancel_gen)
+
+    @safe
+    def cancel_analysis(self):
+        self._cancel_gen += 1
+        return True
+
+    # ---------------------------------------------------------------- handwriting model
+    @safe
+    def model_status(self):
+        st = READER.status()
+        return {**st, **self._model, "error": self._model["error"] or st["error"],
+                "enabled": self._settings.get("handModel", True)}
+
+    @safe
+    def model_download(self):
+        if self._model["downloading"]:
+            return True
+
+        def run():
+            self._model.update(downloading=True, progress=0.0, error=None)
+            try:
+                if READER.error:
+                    READER.remove()
+                READER.download(lambda f: self._model.update(progress=round(f, 3)))
+                READER.error = None
+            except Exception as e:
+                traceback.print_exc()
+                self._model["error"] = str(e)
+            finally:
+                self._model["downloading"] = False
+        threading.Thread(target=run, daemon=True).start()
+        return True
 
     @safe
     def set_ink_kind(self, index, line_id, kind):
@@ -482,8 +524,16 @@ def selftest(pdf, out):
     report["blocks"] = len(blocks)
     if blocks:
         s.edit_block(0, blocks[0]["bbox"], blocks[0]["text"] + " ✓")
-    res = s.analyze(0)
+    from engine.lexicon import LEXICON
+    report["lexicon"] = LEXICON.correct("Ottinoo")
+    report["onnxruntime"] = READER.runtime_ok()
+    if report["lexicon"] != "Ottimo" or not report["onnxruntime"]:
+        raise RuntimeError(f"dizionario o onnxruntime mancanti: {report}")
+    reader = READER if READER.installed() else None
+    report["model"] = bool(reader)
+    res = s.analyze(0, reader=reader)
     report["ink"] = [l["text"] for l in res["ink"]]
+    report["sources"] = [l["source"] for l in res["ink"]]
     report["glyphs"] = len(res["hand"]["glyphs"])
     if res["ink"]:
         s.edit_ink(0, res["ink"][-1]["id"], "Calamo")

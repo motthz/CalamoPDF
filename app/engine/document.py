@@ -2,6 +2,7 @@
 editing, undo/redo and saving."""
 import base64
 import copy
+import difflib
 import os
 import threading
 
@@ -12,7 +13,8 @@ from . import fonts as F
 from . import handwriting as HW
 from . import writers as WR
 from .handwriting import HandwritingLibrary, PageWritings
-from .ocr import PRINT_BELOW, Learning, analyze_page
+from .lexicon import LEXICON, WORD_RE
+from .ocr import PRINT_BELOW, Learning, prepare_page, read_page
 
 REDACT_KW = dict(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=fitz.PDF_REDACT_LINE_ART_NONE)
 try:
@@ -599,10 +601,35 @@ class Session:
         """What the UI needs after a change: the lines, and the writings of the page."""
         return {"ink": self._ink_public(index), **self.hand_info(index, sid), **extra}
 
-    def analyze(self, index, lang=None, include_native=False):
+    def _doc_words(self, index):
+        """Words already on the page (digital text and confirmed readings): the dictionary
+        prefers them, so names and terms of the document are read the same everywhere."""
+        words = set()
+        try:
+            for w in self.doc[index].get_text("words"):
+                words.add(w[4].lower().strip(".,;:!?()\"'"))
+        except Exception:
+            pass
+        for lines in self.ink.values():
+            for l in lines:
+                if l.get("source") == "user":
+                    words.update(t.lower().strip(".,;:!?()\"'") for t in l["text"].split())
+        return words
+
+    def analyze(self, index, lang=None, include_native=False, reader=None, cancelled=None):
+        """Read a page. The slow part (OCR, handwriting model) runs WITHOUT the document lock,
+        so the user can keep scrolling and working while pages are being read."""
         with self.lock:
-            page = self.doc[index]
-            lines = analyze_page(page, self.learning, lang, include_native)
+            doc = self.doc
+            job = prepare_page(doc[index], include_native)
+            version = self.page_versions.get(index, 0)
+            prefer = self._doc_words(index)
+        lines = read_page(job, self.learning, lang, reader, LEXICON, prefer, cancelled)
+        with self.lock:
+            if self.doc is not doc:
+                raise RuntimeError("Il documento è cambiato durante la lettura.")
+            if self.page_versions.get(index, 0) != version:
+                raise RuntimeError(f"La pagina {index + 1} è stata modificata durante la lettura: leggila di nuovo.")
             old = self.hands.get(index)
             pw = self.hands[index] = PageWritings()
             # lines written the same way (same pen, stroke, slant, size) belong to one writing
@@ -619,7 +646,8 @@ class Session:
             self.ink[index] = lines
             self._carry_over(old, pw)
             self._relearn(index)
-            return self._result(index)
+            return self._result(index, read=sum(1 for l in lines if l["source"] != "unread"),
+                                model=sum(1 for l in lines if l["source"] == "model"))
 
     @staticmethod
     def _carry_over(old, pw):
@@ -809,12 +837,65 @@ class Session:
             if line["source"] == "unread" and not line["words"] and text.strip():
                 # an unread line becomes one word per space-separated chunk spread on its width
                 line["words"] = [{"text": text, "bbox": list(line["bbox"])}]
+            before = line["text"]
             line["text"] = text
             line["source"] = "user"
             line["doubt"] = 0.0
             lib = self._line_lib(index, line)
+            # the same writer makes the same mistakes: fix them in the other lines too
+            fixed = self._propagate(index, lib, before, text, line_id)
             self._relearn(index, {lib.sid})
-            return self._result(index, lib.sid, learned=learned, stats=self.learning.stats())
+            return self._result(index, lib.sid, learned=learned, stats=self.learning.stats(), propagated=fixed)
+
+    def _propagate(self, index, lib, before, after, skip):
+        """Apply a correction to the other lines of the same writing that the user has not
+        confirmed yet: whole words first ("Firnoato" -> "Firmato" everywhere), then the
+        letter swaps learned from it ("rn" -> "m") when they turn a non-word into a word."""
+        a, b = before.split(), after.split()
+        words, swaps = {}, []
+        if len(a) == len(b):
+            for x, y in zip(a, b):
+                cx, cy = LEXICON.core(x), LEXICON.core(y)
+                if cx and cy and cx != cy:
+                    words[cx.lower()] = cy
+                    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, cx.lower(), cy.lower()).get_opcodes():
+                        if tag != "equal" and i2 - i1 <= 2 and j2 - j1 <= 2:
+                            swaps.append((cx.lower()[i1:i2], cy.lower()[j1:j2]))
+        lib.confusions = getattr(lib, "confusions", []) + swaps
+        if not words and not lib.confusions:
+            return []
+        changed = []
+        for j, l in enumerate(self.ink.get(index, [])):
+            if j == skip or l.get("style") != lib.sid or l.get("synthetic") or l["source"] in ("user", "unread"):
+                continue
+            out, n = [], 0
+            for tok in l["text"].split(" "):
+                m = WORD_RE.match(tok)
+                if not m:
+                    out.append(tok)
+                    continue
+                pre, core, post = m.groups()
+                new = words.get(core.lower())
+                if new is None and not LEXICON.known(core):
+                    for wrong, right in lib.confusions:
+                        if wrong and wrong in core.lower():
+                            cand = core.lower().replace(wrong, right)
+                            if LEXICON.known(cand):
+                                new = cand
+                                break
+                if new and new.lower() != core.lower():
+                    if core[:1].isupper():
+                        new = new[:1].upper() + new[1:]
+                    out.append(pre + new + post)
+                    n += 1
+                else:
+                    out.append(tok)
+            if n:
+                l["text"] = " ".join(out)
+                l["source"] = "learned"
+                l["doubt"] = min(l["doubt"], 0.3)
+                changed.append(j)
+        return changed
 
     def ink_crop(self, index, line_id):
         with self.lock:

@@ -346,7 +346,7 @@ input[type=color]::-webkit-color-swatch { border: 0; border-radius: 4px; }
 .src-badge { font-size: 9.5px; padding: 2px 7px; border-radius: 20px; font-weight: 600; letter-spacing: .4px; text-transform: uppercase; }
 .src-ocr { background: rgba(122,167,255,.14); color: var(--info); }
 .src-print { background: rgba(150,150,160,.16); color: var(--text-2); }
-.src-learned { background: var(--gold-soft); color: var(--gold); }
+.src-learned, .src-model { background: var(--gold-soft); color: var(--gold); }
 .src-user { background: rgba(255,255,255,.08); color: var(--text-2); }
 .src-doubt { background: rgba(240,113,103,.15); color: var(--danger); }
 
@@ -506,3 +506,12 @@ kbd { font: 600 10px/1 var(--font); padding: 3px 5px; border-radius: 4px; backgr
   .workspace { grid-template-columns: 160px 1fr 300px; }
   .features { grid-template-columns: 1fr 1fr; }
 }
+
+/* reading in the background (status bar) */
+.st-task { display: inline-flex; align-items: center; gap: 8px; color: var(--text-2); }
+.spinner.xs { width: 11px; height: 11px; border-width: 2px; }
+.st-bar { width: 90px; height: 3px; background: var(--line); border-radius: 3px; overflow: hidden; }
+.st-bar i { display: block; height: 100%; width: 0; background: var(--gold); transition: width .25s; }
+.st-cancel { border: 1px solid var(--line-2); background: transparent; color: var(--text-2); border-radius: 5px; font-size: 11px; padding: 1px 7px; cursor: pointer; }
+.st-cancel:hover { color: var(--text); border-color: var(--gold); }
+.model-bar { width: 100%; }
