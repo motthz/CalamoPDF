@@ -106,6 +106,21 @@ def _image_upright(page, rect, png):
     page.insert_image(_unrot(page, rect), stream=png, overlay=True, rotate=page.rotation)
 
 
+def _stack(pngs):
+    """Preview of a paragraph: the images of its lines one under the other."""
+    from PIL import Image
+    imgs = [Image.open(io.BytesIO(p)) if p else None for p in pngs]
+    h = max(i.height for i in imgs if i)
+    W = max(i.width for i in imgs if i)
+    out = Image.new("RGBA", (W, int(h * 1.15) * len(imgs)), (0, 0, 0, 0))
+    for k, i in enumerate(imgs):
+        if i:
+            out.paste(i, (0, int(h * 1.15) * k))
+    buf = io.BytesIO()
+    out.save(buf, "PNG")
+    return buf.getvalue()
+
+
 def _norm(t):
     return "".join(c for c in t.lower() if c.isalnum() or c == " ").strip()
 
@@ -1004,10 +1019,12 @@ class Session:
             else:
                 lib = self._lib(index, sid)
                 xh = height * 0.45 if height else lib.typical_xh()
-            res = lib.render(text, xh, _rgb(color) if color else None)
-            if not res:
+            parts = [lib.render(t, xh, _rgb(color) if color else None) if t.strip() else None
+                     for t in text.split("\n")]
+            if not any(parts):
                 return None
-            return {"img": "data:image/png;base64," + base64.b64encode(res["png"]).decode(),
+            png = parts[0]["png"] if len(parts) == 1 else _stack([p["png"] if p else None for p in parts])
+            return {"img": "data:image/png;base64," + base64.b64encode(png).decode(),
                     "coverage": round(lib.coverage(text), 2), "style": lib.sid, "kind": lib.kind}
 
     def _place(self, page, lib, text, x, baseline, xh, color):
@@ -1033,6 +1050,76 @@ class Session:
                 pass
         return res
 
+    def _line_pitch(self, index, lib, xh):
+        """Distance between two baselines of this writing, measured on the page (the
+        lines of a paragraph written by the same person); else a usual handwriting pitch."""
+        ys = sorted((l["bbox"][1] + l["bbox"][3]) / 2 for l in self.ink.get(index, [])
+                    if l.get("style") == lib.sid and l.get("source") != "unread")
+        gaps = [b - a for a, b in zip(ys, ys[1:]) if xh * 2.2 <= b - a <= xh * 7]
+        return float(np.median(gaps)) if gaps else xh * (2.6 if lib.kind == "print" else 3.4)
+
+    def _wrap(self, lib, text, xh, max_w):
+        """Lines of a text: the user's line breaks, and long lines broken between words
+        where they would run off the page."""
+        out = []
+        for para in text.split("\n"):
+            words = para.split()
+            if not words:
+                out.append("")
+                continue
+            cur = words[0]
+            for w in words[1:]:
+                res = lib.render(cur + " " + w, xh, seed=0)
+                if res and res["width_pt"] > max_w:
+                    out.append(cur)
+                    cur = w
+                else:
+                    cur += " " + w
+            out.append(cur)
+        while out and not out[-1]:
+            out.pop()
+        return out
+
+    def _free(self, page, index, rect, skip=()):
+        """True if nothing is written in rect: no read line, no text, no ink on the image."""
+        for j, l in enumerate(self.ink.get(index, [])):
+            if j not in skip and fitz.Rect(l["bbox"]).intersects(rect):
+                return False
+        if page.get_text("text", clip=_to_text(page, rect)).strip():
+            return False
+        pix = page.get_pixmap(matrix=fitz.Matrix(1, 1), clip=rect, alpha=False)
+        a = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3]
+        if not a.size:
+            return False
+        g = a.mean(axis=2)
+        return float((g < np.percentile(g, 90) - 60).mean()) < 0.004
+
+    def _place_lines(self, index, page, lib, text, x, base, xh, color, skip=()):
+        """Write a (multi-line) text; returns [(text, res, baseline)] for each written line.
+        The following lines go below only where the page is free: otherwise the rest of the
+        text is squeezed into the last line that fits, never written over other writing."""
+        pitch = self._line_pitch(index, lib, xh)
+        right = page.rect.x1 - 24
+        lines = self._wrap(lib, text, xh, right - x)
+        rows = 1
+        while rows < len(lines):
+            b = base + rows * pitch
+            rect = fitz.Rect(x, b - xh * 1.9, right, b + xh * 0.9)
+            if rect.y1 > page.rect.y1 or not self._free(page, index, rect, skip):
+                break
+            rows += 1
+        if rows < len(lines):
+            lines = lines[:rows - 1] + [" ".join(t for t in lines[rows - 1:] if t)]
+        done = []
+        for k, t in enumerate(lines):
+            if not t.strip():
+                continue
+            b = base + k * pitch
+            res = self._place(page, lib, t, x, b, xh, color)
+            if res:
+                done.append((t, res, b))
+        return done
+
     def edit_ink(self, index, line_id, text, color=None):
         with self.lock:
             page = self.doc[index]
@@ -1048,14 +1135,22 @@ class Session:
             self._checkpoint()
             cover = fitz.Rect(r.x0 - 2, r.y0 - h * 0.14, r.x1 + 2, r.y1 + h * 0.14) & page.rect
             self._cover(page, cover)
+            written = []
             if text.strip():
                 # the line is rewritten with the letters of ITS writing only (never mixed)
                 ink_color = _rgb(color) if color else lib.ink_color()
-                res = self._place(page, lib, text, r.x0, base, xh, ink_color)
-                if res:
-                    line["bbox"] = [r.x0, r.y0, max(r.x0 + res["width_pt"], r.x0 + 4), r.y1]
+                written = self._place_lines(index, page, lib, text, r.x0, base, xh, ink_color, skip=(line_id,))
+            if written:
+                text, res, _ = written[0]
+                line["bbox"] = [r.x0, r.y0, max(r.x0 + res["width_pt"], r.x0 + 4), r.y1]
+            # the following lines of a paragraph become lines of the same writing
+            for t, res, b in written[1:]:
+                self.ink[index].append({
+                    "bbox": [r.x0, b - (base - r.y0), r.x0 + res["width_pt"], b + (r.y1 - base)], "raw": t, "text": t,
+                    "words": [], "source": "user", "doubt": 0.0, "synthetic": True, "kind": lib.kind,
+                    "style": lib.sid, "base": b, "xh": xh, "feat": line.get("feat"), "handScore": line.get("handScore")})
             line["base"], line["xh"] = base, xh
-            line["text"] = text
+            line["text"] = text if written or not text.strip() else text.replace("\n", " ")
             line["synthetic"] = True
             line["source"] = "user"
             line["doubt"] = 0.0
@@ -1069,13 +1164,12 @@ class Session:
             xh = float(height) * 0.45 if height else lib.typical_xh()
             base = y + xh * 1.6                    # (x, y) is the top-left of the new line
             self._checkpoint()
-            res = self._place(page, lib, text, x, base, xh, _rgb(color) if color else lib.ink_color())
-            if not res:
-                return self.blocks(index)
-            self.ink.setdefault(index, []).append({
-                "bbox": [x, y, x + res["width_pt"], base + xh * 0.6], "raw": text, "text": text, "words": [],
-                "source": "user", "doubt": 0.0, "synthetic": True, "kind": lib.kind, "style": lib.sid,
-                "base": base, "xh": xh})
+            for t, res, b in self._place_lines(index, page, lib, text, x, base, xh,
+                                               _rgb(color) if color else lib.ink_color()):
+                self.ink.setdefault(index, []).append({
+                    "bbox": [x, b - xh * 1.6, x + res["width_pt"], b + xh * 0.6], "raw": t, "text": t, "words": [],
+                    "source": "user", "doubt": 0.0, "synthetic": True, "kind": lib.kind, "style": lib.sid,
+                    "base": b, "xh": xh})
             self._touch(index)
             return self.blocks(index)
 

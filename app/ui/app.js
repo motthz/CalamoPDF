@@ -808,7 +808,7 @@ async function teach(page, id, text) {
 $("#inkApply").onclick = async () => {
   const p = S.pop;
   if (!p) return;
-  const text = $("#inkNew").value.replace(/\n/g, " ").trim();
+  const text = $("#inkNew").value.replace(/[ \t]+\n/g, "\n").trim();   // Maiusc+Invio = a capo
   const color = $("#inkColor").value;
   if (p.kind === "new" && !text) return closePop();
   closePop();

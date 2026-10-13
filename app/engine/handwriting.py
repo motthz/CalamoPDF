@@ -101,7 +101,8 @@ def measure_line(page, bbox, text=""):
 
 
 class Glyph:
-    __slots__ = ("alpha", "top", "bottom", "width", "join_left", "join_right", "src", "quality", "manual")
+    __slots__ = ("alpha", "top", "bottom", "width", "join_left", "join_right", "src", "quality", "manual",
+                 "entry", "exit")
 
     def __init__(self, alpha, top, bottom, width, join_left, join_right, src=None, quality=1.0, manual=False):
         self.manual = manual        # marked by hand by the user
@@ -113,6 +114,24 @@ class Glyph:
         self.width = width          # in x-heights
         self.join_left = join_left  # stroke continues into neighbour (cursive)
         self.join_right = join_right
+        # height (x-heights from the baseline) where the pen enters and leaves the letter:
+        # in cursive the next letter should start where the previous one ended
+        self.entry, self.exit = self._ends()
+
+    def _ends(self):
+        a = self.alpha
+        if a is None or not a.size or a.shape[0] < 2:
+            return None, None
+        w = max(a.shape[1] // 6, 1)
+        out = []
+        for cols in (a[:, :w], a[:, -w:]):
+            rows = np.where((cols > 80).any(axis=1))[0]
+            if not len(rows):
+                out.append(None)
+                continue
+            r = float(rows[-1])                  # the lowest ink: joins run near the baseline
+            out.append(self.top + (r + 0.5) / a.shape[0] * (self.bottom - self.top))
+        return out[0], out[1]
 
 
 def _png(alpha):
@@ -525,7 +544,10 @@ class HandwritingLibrary:
             p = os.path.join(win, name)
             if os.path.exists(p):
                 return ImageFont.truetype(p, max(int(px), 6))
-        return ImageFont.load_default()
+        try:
+            return ImageFont.load_default(size=max(int(px), 6))      # Pillow >= 10.1, scalable
+        except TypeError:
+            return ImageFont.load_default()
 
     def _font_glyph(self, ch, X):
         """Last resort: a handwriting font, x-height matched (X = x-height in px)."""
@@ -687,11 +709,11 @@ class HandwritingLibrary:
         space = (np.median(self.spaces) if len(self.spaces) >= 2 else
                  (np.median(widths) * 0.75 if widths else 0.7)) * Hpx
         gap_ref = float(np.median(self.gaps)) if len(self.gaps) >= 3 else 0.15
-        prev_join = False
+        prev_join, prev = False, None
         for unit in self._units(text, rnd):
             if unit == " ":
                 x += space * (1.0 if printed else rnd.uniform(0.9, 1.15))
-                prev_join = False
+                prev_join, prev = False, None
                 continue
             accent = None
             case_scale = 1.0
@@ -701,11 +723,15 @@ class HandwritingLibrary:
                 ch = unit
                 g = None
             if g is None:
-                g, accent, case_scale = self._letter(ch, rnd, last, printed, Hpx)
+                g, accent, case_scale = self._letter(ch, rnd, last, printed, Hpx, prev)
                 if g is None:
                     x += space
                     continue
             jitter = 0.0 if printed else rnd.uniform(-0.05, 0.05)
+            if (not printed and prev_join and g.join_left and prev is not None
+                    and prev.exit is not None and g.entry is not None):
+                # nudge the letter so its entry stroke meets the previous exit stroke
+                jitter = float(np.clip(prev.exit - g.entry, -0.12, 0.12)) * 0.6
             scale = 1.0 if printed else rnd.uniform(0.97, 1.03)
             gh = max(int((g.bottom - g.top) * Hpx * scale * case_scale), 1)
             gw = max(int(g.width * Hpx * scale * case_scale), 1)
@@ -720,13 +746,15 @@ class HandwritingLibrary:
             top = (g.bottom + jitter) * Hpx - gh
             placed.append((img, x, top, accent))
             x += gw
-            prev_join = g.join_right
+            prev_join, prev = g.join_right, g
         if not placed:
             return None
         return self._finish(placed, x, Hpx, color, max_width_pt)
 
-    def _letter(self, ch, rnd, last, printed, Hpx):
-        """The glyph for one character: learned, accented, case-swapped or font-drawn."""
+    def _letter(self, ch, rnd, last, printed, Hpx, prev=None):
+        """The glyph for one character: learned, accented, case-swapped or font-drawn.
+        After a joined letter, the variant whose stroke starts where the previous one
+        ended is preferred, so the join looks written in one go."""
         accent = None
         variants = self._variants(ch)
         if not variants and ch in ACCENTS and self._known(ACCENTS[ch][0]):
@@ -747,7 +775,17 @@ class HandwritingLibrary:
             idx = min(good, key=lambda i: abs(variants[i].width - med))
         else:
             choices = [i for i in good if i != last.get(ch)] or good
-            idx = rnd.choice(choices)
+            if len(good) > 2:
+                choices = good          # with many shapes, repetition is unlikely anyway
+            if prev is not None and prev.join_right and prev.exit is not None and len(choices) > 1:
+                def gap(i):
+                    v = variants[i]
+                    return abs(v.entry - prev.exit) if v.join_left and v.entry is not None else 0.6
+                best = min(choices, key=gap)
+                # mostly the best join; sometimes another shape, so repeated letters still vary
+                idx = best if rnd.random() < 0.75 else rnd.choice(choices)
+            else:
+                idx = rnd.choice(choices)
         last[ch] = idx
         return variants[idx], accent, case_scale
 

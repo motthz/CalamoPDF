@@ -13,7 +13,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install numpy pillow onnxruntime tokenizers pymupdf transformers torch --extra-index-url https://download.pytorch.org/whl/cpu
+      - run: python -m pip install -r requirements.txt
       - run: python -c "from app.engine.handreader import READER; READER.download()"
         env:
           CALAMO_MODEL_DIR: ${{ runner.temp }}/m

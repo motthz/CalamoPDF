@@ -36,33 +36,23 @@ for n in ("encoder.onnx", "decoder.onnx"):
     print(n, "OUT", [(o.name, o.shape) for o in s.get_outputs()][:3])
 
 font = ImageFont.truetype(os.path.join(os.environ["WINDIR"], "Fonts", "Inkfree.ttf"), 56)
-def line(t):
+def line(t, bg="white", fg="black"):
     l, tp, r, b = font.getbbox(t)
-    img = Image.new("RGB", (r - l + 40, b - tp + 30), "white")
-    ImageDraw.Draw(img).text((20 - l, 15 - tp), t, font=font, fill="black")
+    img = Image.new("RGB", (r - l + 40, b - tp + 30), bg)
+    ImageDraw.Draw(img).text((20 - l, 15 - tp), t, font=font, fill=fg)
     return img
-texts = ["Consegna entro venerdi", "Firmato Giulia Rossi", "the quick brown fox"]
 R = HR.READER
-for t in texts:
-    print("onnx:", t, "->", R.read(np.asarray(line(t))))
-R._load()
-print("start", R._start, "eos", R._eos, "size", R._size, R._mean, R._std)
-
-# reference: the original PyTorch model
-try:
-    import torch
-    from transformers import TrOCRProcessor, VisionEncoderDecoderModel
-    for name in ("microsoft/trocr-small-handwritten", "microsoft/trocr-base-handwritten"):
-        proc = TrOCRProcessor.from_pretrained(name)
-        model = VisionEncoderDecoderModel.from_pretrained(name)
-        for t in texts:
-            pv = proc(images=line(t), return_tensors="pt").pixel_values
-            t0 = time.time()
-            ids = model.generate(pv, max_new_tokens=40)
-            print("torch", name, t, "->", proc.batch_decode(ids, skip_special_tokens=True)[0], f"{time.time()-t0:.2f}s")
-            if name.endswith("small-handwritten") and t == texts[0]:
-                mine = R._pixels(np.asarray(line(t)))
-                print("pixel diff vs processor", float(np.abs(mine - pv.numpy()).max()))
-                print("first ids torch", ids[0][:8].tolist())
-except Exception as e:
-    import traceback; traceback.print_exc()
+t = "Firmato Giulia Rossi"
+print("A black/white:", R.read(np.asarray(line(t))))
+print("B blue/cream:", R.read(np.asarray(line(t, (247, 246, 241), (25, 40, 140)))))
+import io
+from engine.ocr import windows_ocr
+buf = io.BytesIO(); line(t).save(buf, "PNG")
+print("ocr:", windows_ocr(buf.getvalue()))
+print("C after OCR, black/white:", R.read(np.asarray(line(t))))
+print("D after OCR, blue/cream:", R.read(np.asarray(line(t, (247, 246, 241), (25, 40, 140)))))
+import threading
+out = []
+th = threading.Thread(target=lambda: out.append(R.read(np.asarray(line(t)))))
+th.start(); th.join()
+print("E in another thread:", out)
