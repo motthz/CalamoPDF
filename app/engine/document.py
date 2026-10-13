@@ -10,7 +10,7 @@ import numpy as np
 
 from . import fonts as F
 from .handwriting import HandwritingLibrary
-from .ocr import Learning, ai_refine, analyze_page
+from .ocr import Learning, analyze_page
 
 REDACT_KW = dict(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=fitz.PDF_REDACT_LINE_ART_NONE)
 try:
@@ -509,25 +509,76 @@ class Session:
         out = []
         for j, l in enumerate(self.ink.get(index, [])):
             out.append({"id": j, "bbox": l["bbox"], "text": l["text"], "raw": l["raw"],
-                        "source": l["source"], "doubt": l["doubt"], "synthetic": l.get("synthetic", False)})
+                        "source": l["source"], "doubt": l["doubt"], "synthetic": l.get("synthetic", False),
+                        "kind": l.get("kind", "hand")})
         return out
 
-    def analyze(self, index, lang=None, api_key=None, include_native=False):
+    def analyze(self, index, lang=None, include_native=False):
         with self.lock:
             page = self.doc[index]
             lines = analyze_page(page, self.learning, lang, include_native)
-            ai_error = None
-            if api_key and lines:
-                try:
-                    lines = ai_refine(page, lines, api_key, self.learning)
-                except Exception as e:  # keep the OCR reading if the AI is unavailable
-                    ai_error = str(e)
-            self.ink[index] = lines
             for k in range(len(self.ink.get(index, []))):
                 self.hand.forget((index, k))
+            self.ink[index] = lines
             for j, l in enumerate(lines):
                 self.hand.learn_line(page, l, (index, j))
-            return {"ink": self._ink_public(index), "aiError": ai_error, "hand": self.hand.summary()}
+            return {"ink": self._ink_public(index), "hand": self.hand.summary()}
+
+    def set_ink_kind(self, index, line_id, kind):
+        """The user says whether a line is handwritten ("hand") or printed ("print")."""
+        with self.lock:
+            line = self.ink[index][line_id]
+            line["kind"] = "print" if kind == "print" else "hand"
+            self.hand.forget((index, line_id))
+            if line["kind"] == "hand":
+                line["doubt"] = min(line["doubt"], 0.4)
+                self.hand.learn_line(self.doc[index], line, (index, line_id))
+            return {"ink": self._ink_public(index), "hand": self.hand.summary()}
+
+    def ink_letters(self, index, line_id):
+        """Image of a handwritten line plus where each letter is, for marking letters one by one."""
+        with self.lock:
+            page = self.doc[index]
+            line = self.ink[index][line_id]
+            clip = self.hand._line_clip(page, line["bbox"])
+            zoom = 4
+            pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip, alpha=False)
+            return {"img": "data:image/png;base64," + base64.b64encode(pix.tobytes("png")).decode(),
+                    "rect": [clip.x0, clip.y0, clip.x1, clip.y1], "line": line["bbox"], "text": line["text"],
+                    "segments": self.hand.propose_segments(page, line)}
+
+    def teach_letters(self, index, line_id, segments, update_text=True):
+        """Store the letters/digits the user marked and, optionally, use them as the line reading."""
+        with self.lock:
+            page = self.doc[index]
+            line = self.ink[index][line_id]
+            stored = self.hand.learn_manual(page, line["bbox"], segments)
+            learned = 0
+            marked = sorted((s for s in segments if s.get("char", "").strip()), key=lambda s: s["x0"])
+            if update_text and marked:
+                h = line["bbox"][3] - line["bbox"][1]
+                words = line.get("words") or []
+                breaks = [(a["bbox"][2], b["bbox"][0]) for a, b in zip(words, words[1:])]
+                text = marked[0]["char"]
+                for prev, cur in zip(marked, marked[1:]):
+                    # a space where the OCR saw two words, or where the gap is wide
+                    mid = (prev["x1"] + cur["x0"]) / 2
+                    split = any(a - h * 0.1 <= mid <= b + h * 0.1 for a, b in breaks) or cur["x0"] - prev["x1"] > h * 0.3
+                    text += (" " if split else "") + cur["char"]
+                if text != line["text"]:
+                    learned = self.learning.learn(line["raw"] if line["source"] != "user" else line["text"], text)
+                    line["text"] = text
+                line["source"], line["doubt"], line["kind"] = "user", 0.0, "hand"
+            return {"ink": self._ink_public(index), "stored": stored, "learned": learned,
+                    "hand": self.hand.summary(), "stats": self.learning.stats()}
+
+    def _dark_color(self, page, rect):
+        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=rect & page.rect, alpha=False)
+        a = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3].reshape(-1, 3)
+        if not len(a):
+            return (0.1, 0.1, 0.1)
+        lum = a.mean(axis=1)
+        return tuple(float(v) for v in a[lum <= np.percentile(lum, 8)].mean(axis=0) / 255.0)
 
     def correct_ink(self, index, line_id, text):
         """User teaches the app what is really written."""
@@ -568,9 +619,21 @@ class Session:
             h = r.height
             self._checkpoint()
             cover = fitz.Rect(r.x0 - 2, r.y0 - h * 0.14, r.x1 + 2, r.y1 + h * 0.14) & page.rect
+            printed = line.get("kind") == "print"
+            if printed:
+                ink_color = _rgb(color) if color else self._dark_color(page, r)
             bg = self._background(page, cover)
             page.draw_rect(cover, color=None, fill=bg, overlay=True)
-            if text.strip():
+            if printed and text.strip():
+                # scanned print is rewritten as print, not with the handwriting
+                font, _ = F.system_font("Arial")
+                size = h * 0.98
+                width = font.text_length(text, fontsize=size)
+                tw = fitz.TextWriter(page.rect, color=ink_color)
+                tw.append((r.x0, r.y1 - h * 0.2), text, font=font, fontsize=size)
+                tw.write_text(page)
+                line["bbox"] = [r.x0, r.y0, r.x0 + max(width, 4), r.y1]
+            elif text.strip():
                 ink_color = _rgb(color) if color else self.hand.ink_color()
                 res = self.hand.render(text, h, ink_color, max_width_pt=page.rect.x1 - 18 - r.x0)
                 if res:
@@ -598,7 +661,7 @@ class Session:
             page.insert_image(rect, stream=res["png"], overlay=True)
             self.ink.setdefault(index, []).append({
                 "bbox": [x, y, x + res["width_pt"], y + h], "raw": text, "text": text, "words": [],
-                "source": "user", "doubt": 0.0, "synthetic": True})
+                "source": "user", "doubt": 0.0, "synthetic": True, "kind": "hand"})
             self._touch(index)
             return self.blocks(index)
 
