@@ -1,16 +1,15 @@
 """Text understanding for content that has no text layer (handwriting, scans).
 
 * Windows built-in OCR (offline, no extra download) produces a first reading.
-* An optional Claude vision pass refines the reading using page context.
+* Each line is classified as handwritten or printed (scanned print must not be
+  learned as handwriting), and digits misread as letters are repaired.
 * Every correction the user makes is remembered and re-applied automatically.
 """
 import asyncio
-import base64
-import json
-import os
 import re
 import threading
 
+import numpy as np
 import pymupdf as fitz
 
 from .storage import load_json, save_json
@@ -150,13 +149,15 @@ def _native_rects(page):
 
 
 def analyze_page(page, learning, lang_tag=None, include_native=False):
-    """OCR a page and return 'ink' lines: text that exists only as pixels."""
+    """OCR a page and return 'ink' lines: text that exists only as pixels.
+    Every line gets a 'kind': "hand" (handwritten) or "print" (scanned print)."""
     zoom = OCR_DPI / 72.0
     longest = max(page.rect.width, page.rect.height) * zoom
     if longest > 9800:
         zoom *= 9800 / longest
     pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
     raw_lines = windows_ocr(pix.tobytes("png"), lang_tag)
+    rgb = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3]
     native = [] if include_native else _native_rects(page)
 
     def is_native(r):
@@ -170,7 +171,7 @@ def analyze_page(page, learning, lang_tag=None, include_native=False):
             x0, y0, x1, y1 = (v / zoom for v in w["box"])
             r = fitz.Rect(x0, y0, x1, y1)
             if not is_native(r):
-                kept.append({"text": w["text"], "bbox": [r.x0, r.y0, r.x1, r.y1]})
+                kept.append({"text": fix_letters(fix_numbers(w["text"])), "bbox": [r.x0, r.y0, r.x1, r.y1]})
         if not kept:
             continue
         # split lines where a big horizontal gap separates groups of words
@@ -193,13 +194,71 @@ def analyze_page(page, learning, lang_tag=None, include_native=False):
         x1 = max(w["bbox"][2] for w in words)
         y1 = max(w["bbox"][3] for w in words)
         text, learned = learning.apply(raw)
+        score = hand_score(_crop(rgb, (x0, y0, x1, y1), zoom), raw)
         result.append({
             "bbox": [x0, y0, x1, y1], "raw": raw, "text": text, "words": words,
             "source": "learned" if learned else "ocr", "doubt": _doubt(raw),
-            "synthetic": False,
+            "synthetic": False, "kind": "hand" if score >= PRINT_BELOW else "print", "handScore": round(score, 2),
         })
+    _harmonize_kinds(result)
     result.sort(key=lambda l: (round(l["bbox"][1] / 6), l["bbox"][0]))
     return result
+
+
+# --------------------------------------------------------------------------- digits
+# letters the OCR typically reads in place of handwritten digits
+DIGIT_LOOKALIKE = {"O": "0", "o": "0", "D": "0", "Q": "0", "l": "1", "I": "1", "i": "1", "|": "1", "!": "1",
+                   "Z": "2", "z": "2", "S": "5", "s": "5", "B": "8", "G": "6", "b": "6", "g": "9", "q": "9",
+                   "T": "7"}
+_NUM_SEP = set(".,:/-")
+_WORD_RE = re.compile(r"""^([(\["']*)(.*?)([)\]"'.,;:!?%€]*)$""", re.S)
+
+
+def fix_numbers(word):
+    """'2O24' -> '2024', 'l5/O3' -> '15/03': inside a token that is mostly digits,
+    letters that look like digits are read as digits."""
+    m = _WORD_RE.match(word)
+    pre, core, post = m.group(1), m.group(2), m.group(3)
+    if not core:
+        return word
+    digits = sum(c.isdigit() for c in core)
+    look = sum(c in DIGIT_LOOKALIKE for c in core)
+    other = sum(1 for c in core if not (c.isdigit() or c in DIGIT_LOOKALIKE or c in _NUM_SEP))
+    if digits == 0 or other > 0 or digits < look:
+        return word
+    return pre + "".join(DIGIT_LOOKALIKE.get(c, c) for c in core) + post
+
+
+# digits the OCR typically reads in place of handwritten letters
+LETTER_LOOKALIKE = {"0": "o", "1": "I", "5": "s", "8": "B", "6": "b", "9": "g"}
+
+
+def fix_letters(word):
+    """'Firmat0' -> 'Firmato', 'da+i' -> 'dati': stray digits or '+' inside a word made of letters."""
+    letters, digits = sum(c.isalpha() for c in word), sum(c.isdigit() for c in word)
+    if "+" in word and letters >= 2 and letters > digits:
+        word = word.replace("+", "t")           # a handwritten "t" is often read as "+"
+    m = _WORD_RE.match(word)
+    pre, core, post = m.group(1), m.group(2), m.group(3)
+    digits = [i for i, c in enumerate(core) if c.isdigit()]
+    letters = sum(c.isalpha() for c in core)
+    if len(digits) != 1 or letters < 3 or letters + 1 != len(core) or core[digits[0]] not in LETTER_LOOKALIKE:
+        return word
+    i = digits[0]
+    ch = LETTER_LOOKALIKE[core[i]]
+    neighbours = core[max(i - 1, 0):i] + core[i + 1:i + 2]
+    upper = bool(neighbours) and all(c.isupper() for c in neighbours if c.isalpha())
+    if core[i] == "1" and not upper:
+        return word                     # "1" for "i" or "l"? can't tell: left for the user
+    ch = ch.upper() if upper else ch
+    if core[i] == "0" and i == 0 and core[1:2].islower():
+        ch = "O"                        # capital at the start of a word: "0ttimo" -> "Ottimo"
+    return pre + core[:i] + ch + core[i + 1:] + post
+
+
+def _is_number(tok):
+    core = tok.strip("()[]\"'.,;:!?%€+-")
+    return bool(core) and any(c.isdigit() for c in core) and all(c.isdigit() or c in _NUM_SEP for c in core)
 
 
 def _doubt(text):
@@ -207,79 +266,117 @@ def _doubt(text):
     if not text:
         return 1.0
     score = 0.0
-    letters = sum(c.isalpha() for c in text)
-    odd = sum(1 for c in text if not (c.isalnum() or c.isspace() or c in ".,;:'\"!?-()€%/àèéìòùÀÈÉÌÒÙ"))
+    toks = text.split()
+    # symbols are odd in words (a "+" is often a misread "t"), normal in numbers (+39, 3*4)
+    odd = sum(1 for t in toks for c in t
+              if not (c.isalnum() or c in ".,;:'\"!?-()€%/°àèéìòùÀÈÉÌÒÙ" or (_is_number(t) or len(t) == 1) and c in "+=*#<>"))
     score += min(odd / max(len(text), 1) * 4, 0.6)
-    if letters and any(c.isdigit() for c in text) and any(c.isalpha() for c in text):
-        mixed = sum(1 for t in text.split() if any(c.isdigit() for c in t) and any(c.isalpha() for c in t))
-        score += 0.25 * mixed
-    if len(text.strip()) <= 2:
+    mixed = sum(1 for t in toks if not _is_number(t) and any(c.isdigit() for c in t) and any(c.isalpha() for c in t))
+    score += 0.25 * mixed
+    if len(text.strip()) <= 2 and not all(_is_number(t) for t in toks):
         score += 0.3
     return round(min(score, 1.0), 2)
 
 
-# --------------------------------------------------------------------------- Claude vision
-AI_MODEL = "claude-opus-5-5"
+# --------------------------------------------------------------------------- handwritten or printed?
+PRINT_BELOW = 0.36      # hand_score under this = printed text
 
 
-def ai_refine(page, lines, api_key, learning):
-    """Ask Claude to re-read the ink lines of a page using the page image as context."""
-    import anthropic
+def _crop(rgb, bbox, zoom):
+    x0, y0, x1, y1 = bbox
+    h = (y1 - y0) * zoom
+    a, b = int(max(y0 * zoom - h * 0.12, 0)), int(min(y1 * zoom + h * 0.12, rgb.shape[0]))
+    c, d = int(max(x0 * zoom - 2, 0)), int(min(x1 * zoom + 2, rgb.shape[1]))
+    return rgb[a:b, c:d]
 
-    if not lines:
-        return lines
-    zoom = 2.0
-    pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
-    img_b64 = base64.standard_b64encode(pix.tobytes("png")).decode("ascii")
-    W, H = page.rect.width, page.rect.height
-    listing = "\n".join(
-        f'{i}: box=({l["bbox"][0] / W:.3f},{l["bbox"][1] / H:.3f},{l["bbox"][2] / W:.3f},{l["bbox"][3] / H:.3f}) '
-        f'ocr="{l["text"]}"' for i, l in enumerate(lines))
-    hints = learning.hints()
-    prompt = (
-        "This is a page from a PDF. Some lines are handwritten or scanned, so a basic OCR read them, "
-        "often wrongly. For each numbered line below (box = normalized x0,y0,x1,y1 on the page), read the "
-        "actual text in that region of the image and return the exact transcription, keeping the original "
-        "language, spelling, punctuation and capitalization as written. If a region is unreadable keep the OCR text.\n\n"
-        f"{listing}"
-    )
-    if hints:
-        prompt += "\n\nThe user previously corrected these OCR misreadings of their handwriting:\n" + "\n".join(hints)
-    client = anthropic.Anthropic(api_key=api_key)
-    response = client.beta.messages.create(
-        model=AI_MODEL,
-        max_tokens=16000,
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
-        output_config={
-            "effort": "medium",
-            "format": {
-                "type": "json_schema",
-                "schema": {
-                    "type": "object",
-                    "properties": {"lines": {"type": "array", "items": {
-                        "type": "object",
-                        "properties": {"id": {"type": "integer"}, "text": {"type": "string"}},
-                        "required": ["id", "text"], "additionalProperties": False}}},
-                    "required": ["lines"], "additionalProperties": False,
-                },
-            },
-        },
-        messages=[{"role": "user", "content": [
-            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": img_b64}},
-            {"type": "text", "text": prompt},
-        ]}],
-    )
-    if response.stop_reason == "refusal":
-        raise RuntimeError("L'AI ha rifiutato la richiesta per questa pagina.")
-    text = next((b.text for b in response.content if b.type == "text"), "")
-    data = json.loads(text)
-    for item in data.get("lines", []):
-        i = item.get("id")
-        if isinstance(i, int) and 0 <= i < len(lines) and item.get("text", "").strip():
-            new = item["text"].strip()
-            if new != lines[i]["text"]:
-                lines[i]["text"] = new
-                lines[i]["source"] = "ai"
-            lines[i]["doubt"] = min(lines[i]["doubt"], 0.1)
-    return lines
+
+def _otsu(gray):
+    hist = np.bincount(gray.ravel(), minlength=256).astype(np.float64)
+    p = hist / max(hist.sum(), 1)
+    omega = np.cumsum(p)
+    mu = np.cumsum(p * np.arange(256))
+    between = (mu[-1] * omega - mu) ** 2 / np.maximum(omega * (1 - omega), 1e-12)
+    return int(np.argmax(between))
+
+
+def _segments(ink, min_mass):
+    cols = ink.any(axis=0)
+    segs, start = [], None
+    for x, on in enumerate(cols):
+        if on and start is None:
+            start = x
+        elif not on and start is not None:
+            segs.append((start, x))
+            start = None
+    if start is not None:
+        segs.append((start, len(cols)))
+    return [s for s in segs if ink[:, s[0]:s[1]].sum() >= min_mass]
+
+
+def hand_score(rgb, text=""):
+    """0..1: how much a line crop looks handwritten (1) rather than printed (0).
+
+    Printed text sits on a perfectly straight baseline, its letters are all the
+    same height and separate from each other, and it is (almost always) black.
+    Handwriting drifts, joins letters, varies in size and often uses coloured ink."""
+    if rgb.size == 0 or rgb.shape[0] < 6 or rgb.shape[1] < 6:
+        return 1.0
+    gray = (0.299 * rgb[:, :, 0] + 0.587 * rgb[:, :, 1] + 0.114 * rgb[:, :, 2]).astype(np.uint8)
+    bg = float(np.percentile(gray, 92))
+    thr = min(_otsu(gray), bg - 25)
+    ink = gray < thr
+    if ink.mean() < 0.004:
+        return 1.0
+    H = rgb.shape[0]
+
+    # coloured ink (blue, red, green pens) is a strong handwriting signal
+    dark = rgb[ink].astype(np.float32)
+    lum = dark.mean(axis=1)
+    core = dark[lum <= np.percentile(lum, 40)].mean(axis=0)
+    chroma = float(core.max() - core.min())
+    colour = float(np.clip((chroma - 22) / 30, 0, 1))
+
+    segs = _segments(ink, max(H * 0.08, 2))
+    n_chars = sum(1 for c in text if not c.isspace())
+    if len(segs) < 4 or n_chars < 4:
+        return max(0.6, colour)           # too little evidence: keep it as handwriting
+
+    tops, bots, heights, xs = [], [], [], []
+    for a, b in segs:
+        rows = np.where(ink[:, a:b].any(axis=1))[0]
+        tops.append(rows[0])
+        bots.append(rows[-1] + 1)
+        heights.append(rows[-1] + 1 - rows[0])
+        xs.append((a + b) / 2)
+    tops, bots, xs = np.array(tops, float), np.array(bots, float), np.array(xs, float)
+    ref = max(float(np.median(heights)), 4.0)
+
+    def spread(v):
+        """robust deviation from a straight line (a printed line may be slightly skewed)"""
+        k, q = np.polyfit(xs, v, 1)
+        res = np.abs(v - (k * xs + q))
+        return float(np.percentile(res, 60)) / ref
+
+    base = float(np.clip((spread(bots) - 0.035) / 0.09, 0, 1))      # baseline drift
+    top = float(np.clip((spread(tops) - 0.10) / 0.18, 0, 1))        # x-height irregularity
+    # cursive writing joins letters: many characters per connected column block
+    per_seg = n_chars / len(segs)
+    joined = float(np.clip((per_seg - 1.35) / 1.2, 0, 1))
+    shape = 0.5 * base + 0.25 * top + 0.25 * joined
+    return float(max(shape, 0.85 * joined, colour))
+
+
+def _harmonize_kinds(lines):
+    """Lines of almost the same height, aligned to the same left margin and
+    classified mostly as print are a printed paragraph: borderline ones follow."""
+    prints = [l for l in lines if l["kind"] == "print"]
+    if len(prints) < 2:
+        return
+    for l in lines:
+        if l["kind"] != "hand" or l["handScore"] > PRINT_BELOW + 0.12:
+            continue
+        h = l["bbox"][3] - l["bbox"][1]
+        same = sum(1 for p in prints if abs((p["bbox"][3] - p["bbox"][1]) - h) < h * 0.08
+                   and abs(p["bbox"][0] - l["bbox"][0]) < h * 0.5)
+        if same >= 2:
+            l["kind"] = "print"

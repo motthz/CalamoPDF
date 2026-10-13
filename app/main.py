@@ -21,8 +21,9 @@ from engine import fonts as F  # noqa: E402
 from engine.document import Session  # noqa: E402
 from engine.ocr import available_languages  # noqa: E402
 from engine.storage import load_json, save_json  # noqa: E402
+import updater  # noqa: E402
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 _user32 = ctypes.windll.user32
 _user32.FindWindowW.restype = wintypes.HWND
@@ -37,7 +38,9 @@ _user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, cty
 class _MONITORINFO(ctypes.Structure):
     _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT), ("rcWork", wintypes.RECT),
                 ("dwFlags", wintypes.DWORD)]
-SETTINGS_DEFAULT = {"theme": "dark", "ocrLang": "", "aiKey": "", "useAi": False, "recent": []}
+SETTINGS_DEFAULT = {"theme": "dark", "ocrLang": "", "recent": [], "tutorialDone": False, "autoUpdate": True,
+                    "updateTried": ""}
+OBSOLETE_SETTINGS = ("aiKey", "useAi")
 
 
 def _dialog_kind(name):
@@ -63,6 +66,14 @@ class Api:
         self._s = Session()
         self._window = None
         self._settings = {**SETTINGS_DEFAULT, **load_json("settings.json", {})}
+        if any(k in self._settings for k in OBSOLETE_SETTINGS):
+            for k in OBSOLETE_SETTINGS:  # the Claude connection was removed: delete any stored key
+                self._settings.pop(k, None)
+            save_json("settings.json", self._settings)
+        self._update = None              # newer release found on GitHub
+        self._update_file = None         # downloaded and ready to install
+        self._update_relaunch = False
+        self._downloading = False
         self._closing_ok = False
         self._max = False
         self._restore_rect = None
@@ -89,8 +100,82 @@ class Api:
         recent = [{"path": p, "name": os.path.basename(p), "folder": os.path.dirname(p)}
                   for p in self._settings.get("recent", []) if os.path.exists(p)]
         return {"version": VERSION, "settings": {k: v for k, v in self._settings.items() if k != "recent"},
+                "canUpdate": updater.frozen(),
                 "recent": recent, "fonts": F.UI_FAMILIES, "languages": available_languages(),
                 "startup": self.startup_path, "learning": self._s.learning.stats()}
+
+    # ---------------------------------------------------------------- updates
+    @safe
+    def check_update(self):
+        """Ask GitHub for a newer release; download it in the background if allowed."""
+        if self._update and (self._update_file or self._downloading):
+            # already found: don't download it twice
+            return {**self._update, "ready": bool(self._update_file), "downloading": self._downloading}
+        info = updater.check(VERSION)
+        self._update = info
+        if not info:
+            return None
+        # an update to this version was already attempted and we are still old: don't loop
+        info["retry"] = self._settings.get("updateTried") == info["version"]
+        if info["canInstall"] and self._settings.get("autoUpdate", True) and not info["retry"]:
+            self._start_download()
+            info["downloading"] = True
+        return info
+
+    def _start_download(self):
+        if self._downloading or self._update_file:
+            return
+        self._downloading = True
+        threading.Thread(target=self._download_update, daemon=True).start()
+
+    @safe
+    def download_update(self):
+        if not self._update or not self._update.get("canInstall"):
+            raise RuntimeError("Nessun aggiornamento installabile.")
+        self._start_download()
+        return True
+
+    def _download_update(self):
+        info = self._update
+        shown = [-1]
+
+        def progress(f):
+            pct = int(f * 100)
+            if pct != shown[0]:
+                shown[0] = pct
+                self._js(f"app.updateProgress({f:.2f})")
+        try:
+            path = updater.download(info, progress)
+            self._update_file = path
+            self._js(f"app.updateReady({json.dumps(info)})")
+        except Exception as e:
+            traceback.print_exc()
+            self._js(f"app.updateFailed({json.dumps(str(e))})")
+        finally:
+            self._downloading = False
+
+    @safe
+    def restart_to_update(self):
+        if not self._update_file:
+            raise RuntimeError("L'aggiornamento non è ancora pronto.")
+        self._update_relaunch = True
+        self._closing_ok = True
+        self._window.destroy()
+        return True
+
+    @safe
+    def open_release_page(self):
+        import webbrowser
+        webbrowser.open((self._update or {}).get("page") or updater.RELEASES_PAGE)
+        return True
+
+    def install_pending_update(self):
+        """Called after the window has closed."""
+        if not self._update_file:
+            return
+        self._settings["updateTried"] = self._update["version"]
+        save_json("settings.json", self._settings)
+        updater.apply(self._update, self._update_file, self._update_relaunch)
 
     @safe
     def set_settings(self, values):
@@ -281,12 +366,35 @@ class Api:
         return self._s.replace_all(term, repl)
 
     # ---------------------------------------------------------------- handwriting
-    def _ai_key(self):
-        return self._settings.get("aiKey") if self._settings.get("useAi") else None
-
     @safe
     def analyze(self, index):
-        return self._s.analyze(index, self._settings.get("ocrLang") or None, self._ai_key())
+        return self._s.analyze(index, self._settings.get("ocrLang") or None)
+
+    @safe
+    def set_ink_kind(self, index, line_id, kind):
+        return self._s.set_ink_kind(index, line_id, kind)
+
+    @safe
+    def ink_letters(self, index, line_id):
+        return self._s.ink_letters(index, line_id)
+
+    @safe
+    def teach_letters(self, index, line_id, segments, update_text=True):
+        return self._s.teach_letters(index, line_id, segments, update_text)
+
+    @safe
+    def glyph_variants(self, char):
+        return self._s.hand.variants(char)
+
+    @safe
+    def delete_glyph(self, char, kind, i):
+        self._s.hand.delete_variant(char, kind, i)
+        return {"hand": self._s.hand.summary(), "variants": self._s.hand.variants(char)}
+
+    @safe
+    def forget_letters(self):
+        self._s.hand.forget_manual()
+        return self._s.hand.summary()
 
     @safe
     def correct_ink(self, index, line_id, text):
@@ -317,13 +425,6 @@ class Api:
     def reset_learning(self):
         self._s.learning.reset()
         return self._s.learning.stats()
-
-    @safe
-    def test_ai(self, key):
-        import anthropic
-        client = anthropic.Anthropic(api_key=key)
-        client.models.retrieve("claude-opus-5-5")
-        return True
 
 
 def on_drop(api):
@@ -400,6 +501,10 @@ def main():
     window.events.loaded += loaded
     webview.start(gui="edgechromium", debug=bool(os.environ.get("CALAMO_DEBUG")),
                   storage_path=os.path.join(os.environ.get("APPDATA", "."), "CalamoPDF", "webview"))
+    try:
+        api.install_pending_update()
+    except Exception:
+        traceback.print_exc()
 
 
 if __name__ == "__main__":

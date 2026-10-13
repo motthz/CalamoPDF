@@ -3,7 +3,7 @@
 from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 
 hidden = (collect_submodules("winrt") + collect_submodules("webview.platforms")
-          + ["clr", "anthropic", "openpyxl", "docx"])
+          + ["clr", "openpyxl", "docx"])
 datas = [("app/ui", "ui"), ("assets/icon.ico", "assets")] + collect_data_files("webview") + collect_data_files("docx")
 
 a = Analysis(

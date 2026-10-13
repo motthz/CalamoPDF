@@ -54,6 +54,13 @@
     <symbol id="i-chev-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
     <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
     <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></symbol>
+    <symbol id="i-letters" viewBox="0 0 24 24"><rect x="3" y="5" width="7" height="14" rx="1.5"/><rect x="14" y="5" width="7" height="14" rx="1.5"/><path d="M5.5 15l1-6 1 6M16 9h2.5a1.5 1.5 0 0 1 0 3H16v3h3"/></symbol>
+    <symbol id="i-split" viewBox="0 0 24 24"><path d="M12 3v18M8 8l-4 4 4 4M16 8l4 4-4 4"/></symbol>
+    <symbol id="i-merge" viewBox="0 0 24 24"><path d="M4 12h16M8 8l4 4-4 4M16 8l-4 4 4 4"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 19h14"/></symbol>
+    <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14M12 17.5v.01"/></symbol>
+    <symbol id="i-print" viewBox="0 0 24 24"><path d="M6 9V3h12v6M6 18H4a1 1 0 0 1-1-1v-6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v6a1 1 0 0 1-1 1h-2"/><path d="M6 14h12v7H6z"/></symbol>
     <symbol id="i-learn" viewBox="0 0 24 24"><path d="M22 10 12 5 2 10l10 5z"/><path d="M6 12v5c3 2 9 2 12 0v-5"/></symbol>
   </defs>
 </svg>
@@ -180,7 +187,11 @@
             <button class="btn primary sm grow" data-cmd="analyze" data-need-doc>Analizza pagina</button>
             <button class="btn ghost sm grow" data-cmd="analyzeAll" data-need-doc>Tutto il documento</button>
           </div>
-          <div class="ai-pill" id="aiPill"></div>
+          <div class="legend">
+            <span><i class="lg-hand"></i>Scritto a mano</span>
+            <span><i class="lg-print"></i>Stampato</span>
+            <span><i class="lg-doubt"></i>Da verificare</span>
+          </div>
         </div>
 
         <div class="section-title">Testo riconosciuto <span class="muted" id="inkPageLabel"></span></div>
@@ -193,6 +204,7 @@
           <div class="hand-meta"><span class="ink-swatch" id="inkSwatch"></span><span id="handMeta" class="muted small">Nessuna lettera appresa</span></div>
           <div class="glyphs" id="glyphs"></div>
           <div class="learn-meta muted small" id="learnMeta"></div>
+          <p class="muted small glyph-hint">Clicca una lettera per vederne gli esempi ed eliminare quelli sbagliati.</p>
         </div>
       </div>
 
@@ -237,17 +249,25 @@
           <label>Lingua OCR<select id="ocrLang"></select></label>
           <p class="muted small">Il riconoscimento di base usa il motore OCR integrato in Windows e funziona offline.</p>
         </div>
-        <div class="section-title">Lettura avanzata con AI <span class="badge">opzionale</span></div>
+        <div class="section-title">Aggiornamenti</div>
         <div class="card form">
-          <label class="switch-row"><span>Usa Claude per leggere la scrittura a mano</span><input type="checkbox" id="useAi" class="switch"></label>
-          <label>Chiave API Anthropic<input id="aiKey" type="password" placeholder="sk-ant-…" spellcheck="false" autocomplete="off"></label>
-          <div class="row gap"><button class="btn ghost sm" data-cmd="testAi">Verifica chiave</button><span class="muted small" id="aiTest"></span></div>
-          <p class="muted small">Con l'AI attiva, l'immagine della pagina viene inviata ad Anthropic per una lettura più accurata. Senza chiave, tutto resta sul tuo PC.</p>
+          <label class="switch-row"><span>Aggiorna automaticamente quando esce una nuova versione</span><input type="checkbox" id="autoUpdate" class="switch"></label>
+          <div class="row gap"><button class="btn ghost sm" data-cmd="checkUpdate"><svg><use href="#i-refresh"/></svg>Cerca aggiornamenti</button><span class="muted small" id="updateStatus"></span></div>
+          <button class="btn primary sm" id="updateAction" hidden></button>
+          <p class="muted small">Calamo controlla le nuove versioni pubblicate su GitHub, le scarica in background e le installa alla chiusura.</p>
         </div>
         <div class="section-title">Memoria di apprendimento</div>
         <div class="card">
           <p class="muted small" id="learnStats"></p>
-          <button class="btn ghost sm danger-text" data-cmd="resetLearning">Dimentica le correzioni</button>
+          <p class="muted small" id="lettersStats"></p>
+          <div class="row gap wrap">
+            <button class="btn ghost sm danger-text" data-cmd="resetLearning">Dimentica le correzioni</button>
+            <button class="btn ghost sm danger-text" data-cmd="forgetLetters">Dimentica le lettere segnate</button>
+          </div>
+        </div>
+        <div class="section-title">Guida</div>
+        <div class="card">
+          <button class="btn ghost sm" data-cmd="tutorial"><svg><use href="#i-help"/></svg>Rivedi il tutorial</button>
         </div>
         <p class="about muted small" id="about"></p>
       </div>
@@ -288,6 +308,13 @@
     <label class="pop-label">Calamo ha letto <span class="src-badge" id="inkSrc"></span></label>
     <div class="row gap"><input id="inkRead" spellcheck="false"><button class="btn ghost sm" id="inkTeach" title="Insegna la lettura corretta"><svg><use href="#i-learn"/></svg>Correggi</button></div>
     <p class="muted small">Se la lettura è sbagliata, scrivi cosa c'è davvero: Calamo lo ricorderà e imparerà meglio le lettere.</p>
+    <div class="row gap between kind-row">
+      <div class="seg-switch" id="inkKind">
+        <button data-kind="hand"><svg><use href="#i-pen"/></svg>A mano</button>
+        <button data-kind="print"><svg><use href="#i-print"/></svg>Stampato</button>
+      </div>
+      <button class="btn ghost sm" id="inkLetters" title="Indica dove si trova ogni lettera e numero"><svg><use href="#i-letters"/></svg>Segna lettere</button>
+    </div>
   </div>
   <div class="pop-section">
     <label class="pop-label">Nuovo testo</label>
@@ -296,6 +323,64 @@
     <div class="row gap between">
       <div class="row gap"><input type="color" id="inkColor" title="Colore inchiostro"><span class="muted small" id="inkCoverage"></span></div>
       <button class="btn primary sm" id="inkApply"><svg><use href="#i-check"/></svg><span>Applica</span></button>
+    </div>
+  </div>
+</div>
+
+<!-- Letter marking -->
+<div class="modal-back" id="lettersModal" hidden>
+  <div class="modal letters-modal">
+    <div class="pop-head"><svg><use href="#i-letters"/></svg><b>Segna lettere e numeri</b><button class="icon-btn" data-cmd="lettersClose"><svg><use href="#i-x"/></svg></button></div>
+    <p class="muted small">Ogni riquadro è una lettera o un numero. Clicca un riquadro e digita il carattere (passa da solo al successivo).
+      Trascina i bordi per spostarli, trascina su uno spazio vuoto per aggiungere un riquadro, <kbd>Canc</kbd> per eliminarlo.</p>
+    <div class="letters-stage" id="lettersStage">
+      <div class="letters-canvas" id="lettersCanvas"><img id="lettersImg" alt="" draggable="false"><div class="letters-boxes" id="lettersBoxes"></div></div>
+    </div>
+    <div class="row gap wrap letters-tools">
+      <button class="btn ghost sm" data-cmd="letterSplit" title="Dividi in due il riquadro selezionato"><svg><use href="#i-split"/></svg>Dividi</button>
+      <button class="btn ghost sm" data-cmd="letterMerge" title="Unisci con il riquadro successivo"><svg><use href="#i-merge"/></svg>Unisci</button>
+      <button class="btn ghost sm" data-cmd="letterDelete" title="Elimina il riquadro selezionato"><svg><use href="#i-trash"/></svg>Elimina</button>
+      <button class="btn ghost sm" data-cmd="letterReset" title="Torna alla proposta di Calamo"><svg><use href="#i-refresh"/></svg>Ripristina</button>
+      <span class="grow"></span>
+      <span class="muted small" id="lettersCount"></span>
+    </div>
+    <label class="pop-label">Caratteri in ordine <span class="muted small">(senza spazi: uno per riquadro)</span></label>
+    <input id="lettersSeq" spellcheck="false" autocomplete="off">
+    <div class="row gap between letters-foot">
+      <label class="check"><input type="checkbox" id="lettersUpdateText" checked>Usa questi caratteri anche come lettura della riga</label>
+      <div class="row gap">
+        <button class="btn ghost sm" data-cmd="lettersClose">Annulla</button>
+        <button class="btn primary sm" data-cmd="lettersSave"><svg><use href="#i-check"/></svg>Salva lettere</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Glyph samples -->
+<div class="modal-back" id="glyphModal" hidden>
+  <div class="modal glyph-modal">
+    <div class="pop-head"><b id="glyphTitle"></b><button class="icon-btn" data-cmd="glyphClose"><svg><use href="#i-x"/></svg></button></div>
+    <p class="muted small">Gli esempi segnati da te (bordo dorato) hanno la precedenza e restano anche negli altri documenti. Elimina quelli sbagliati.</p>
+    <div class="glyph-variants" id="glyphVariants"></div>
+  </div>
+</div>
+
+<!-- First-run tutorial -->
+<div class="tour-back" id="tour" hidden>
+  <div class="tour">
+    <div class="tour-art" id="tourArt"></div>
+    <div class="tour-body">
+      <div class="tour-step muted small" id="tourStep"></div>
+      <h2 id="tourTitle"></h2>
+      <p id="tourText"></p>
+    </div>
+    <div class="tour-foot">
+      <div class="tour-dots" id="tourDots"></div>
+      <div class="row gap">
+        <button class="btn ghost sm" id="tourSkip">Salta</button>
+        <button class="btn ghost sm" id="tourPrev">Indietro</button>
+        <button class="btn primary sm" id="tourNext">Avanti</button>
+      </div>
     </div>
   </div>
 </div>

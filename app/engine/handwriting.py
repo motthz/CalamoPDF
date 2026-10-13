@@ -4,6 +4,9 @@ The app learns the writer's own letter shapes from the handwritten words on the
 page (using the recognised - and user-corrected - text as labels), then composes
 new text from those glyphs, matching size, ink colour and rhythm. Letters never
 seen fall back to a handwriting font tinted with the same ink.
+
+The user can also mark letters and digits one by one ("manual" glyphs): those
+always win over the automatic ones and are kept across documents.
 """
 import base64
 import io
@@ -13,6 +16,8 @@ import random
 import pymupdf as fitz
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+
+from .storage import load_json, save_json
 
 DPI = 300
 S = DPI / 72.0
@@ -45,9 +50,10 @@ def _otsu(gray):
 
 
 class Glyph:
-    __slots__ = ("alpha", "top", "bottom", "width", "join_left", "join_right", "src", "quality")
+    __slots__ = ("alpha", "top", "bottom", "width", "join_left", "join_right", "src", "quality", "manual")
 
-    def __init__(self, alpha, top, bottom, width, join_left, join_right, src=None, quality=1.0):
+    def __init__(self, alpha, top, bottom, width, join_left, join_right, src=None, quality=1.0, manual=False):
+        self.manual = manual        # marked by hand by the user
         self.src = src              # which ink line it was learned from
         self.quality = quality      # 1 = clean gap segmentation, lower = forced split
         self.alpha = alpha          # uint8 array, ink coverage
@@ -58,16 +64,57 @@ class Glyph:
         self.join_right = join_right
 
 
+def _png(alpha):
+    buf = io.BytesIO()
+    Image.fromarray(alpha).save(buf, "PNG")
+    return buf.getvalue()
+
+
+def _data_url(alpha):
+    return "data:image/png;base64," + base64.b64encode(_png(255 - alpha)).decode()
+
+
+MANUAL_FILE = "calligrafia.json"
+MANUAL_PER_CHAR = 24
+
+
 class HandwritingLibrary:
     def __init__(self):
-        self.glyphs = {}      # char -> [Glyph]
+        self.glyphs = {}      # char -> [Glyph] learned automatically from the open document
+        self.manual = {}      # char -> [Glyph] marked by the user, persistent
         self.inks = []        # observed ink colours
         self.heights = []     # observed line heights (pt)
         self.words_seen = 0
+        self._load_manual()
+
+    # ------------------------------------------------------------------ persistence of manual glyphs
+    def _load_manual(self):
+        for item in load_json(MANUAL_FILE, {"glyphs": []}).get("glyphs", []):
+            try:
+                img = Image.open(io.BytesIO(base64.b64decode(item["png"])))
+                g = Glyph(np.array(img.convert("L")), item["top"], item["bottom"], item["width"],
+                          item["jl"], item["jr"], "manual", 1.0, True)
+                self.manual.setdefault(item["char"], []).append(g)
+            except Exception:
+                continue
+
+    def _save_manual(self):
+        out = [{"char": ch, "png": base64.b64encode(_png(g.alpha)).decode("ascii"), "top": g.top,
+                "bottom": g.bottom, "width": g.width, "jl": g.join_left, "jr": g.join_right}
+               for ch, gs in self.manual.items() for g in gs]
+        save_json(MANUAL_FILE, {"glyphs": out})
+
+    def _variants(self, ch):
+        """Glyphs to draw a character with: the user's own markings come first."""
+        return self.manual.get(ch) or self.glyphs.get(ch)
+
+    def _known(self, ch):
+        return ch in self.manual or ch in self.glyphs
 
     # ------------------------------------------------------------------ learning
     def clear(self):
-        self.__init__()
+        """Forget what was learned from the current document (manual marks stay)."""
+        self.glyphs, self.inks, self.heights, self.words_seen = {}, [], [], 0
 
     def forget(self, src):
         for ch in list(self.glyphs):
@@ -79,7 +126,8 @@ class HandwritingLibrary:
         """line: ink line dict with 'words' (text,bbox) and corrected 'text'."""
         if src is not None:
             self.forget(src)
-        if line.get("synthetic") or (line.get("source") == "ocr" and line.get("doubt", 0) > 0.4):
+        if line.get("synthetic") or line.get("kind") == "print" or \
+                (line.get("source") == "ocr" and line.get("doubt", 0) > 0.4):
             return
         words = line["words"]
         labels = line["text"].split()
@@ -96,32 +144,25 @@ class HandwritingLibrary:
             except Exception:
                 pass
 
-    def _learn_word(self, page, rect, label, src=None):
-        label = "".join(c for c in label if not c.isspace())
-        if not label or rect.height < 3:
-            return
-        Hw = rect.height
-        pad = Hw * 0.35
-        clip = fitz.Rect(rect.x0 - 1, rect.y0 - pad, rect.x1 + 1, rect.y1 + pad) & page.rect
+    @staticmethod
+    def _ink(page, clip):
+        """Render clip and return (ink mask, alpha, rgb) at DPI."""
         pix = page.get_pixmap(matrix=fitz.Matrix(S, S), clip=clip, alpha=False)
         rgb = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3]
         gray = (0.299 * rgb[:, :, 0] + 0.587 * rgb[:, :, 1] + 0.114 * rgb[:, :, 2]).astype(np.uint8)
         bg = float(np.percentile(gray, 92))
         thr = min(_otsu(gray), bg - 25)
         ink = gray < thr
-        if ink.mean() < 0.005:
-            return
-        dark = rgb[ink]
-        if len(dark):
-            lum = dark.mean(axis=1)
-            core = dark[lum <= np.percentile(lum, 35)]
-            self.inks.append(core.mean(axis=0).tolist())
+        if not ink.any():
+            return ink, np.zeros_like(gray), rgb
         darkest = float(np.percentile(gray[ink], 5))
         alpha = np.clip((bg - gray.astype(np.float32)) / max(bg - darkest, 1) * 255, 0, 255).astype(np.uint8)
         alpha[~ink & (alpha < 90)] = 0
-        box_top_px = (rect.y0 - clip.y0) * S
-        Hpx = Hw * S
+        return ink, alpha, rgb
 
+    @staticmethod
+    def _split(ink, n, Hpx):
+        """Cut a word image into n letter columns. Returns ([a, b, join_left, join_right]...), quality."""
         profile = ink.sum(axis=0)
         cols = profile > 0
         segs, start = [], None
@@ -134,10 +175,11 @@ class HandwritingLibrary:
         if start is not None:
             segs.append([start, len(cols), False, False])
         if not segs:
-            return
+            return [], 0.0
         # drop specks
         segs = [s for s in segs if ink[:, s[0]:s[1]].sum() > Hpx * 0.15] or segs
-        n = len(label)
+        if n <= 0:
+            return segs, 1.0
         # merge segments closest to each other until they fit
         while len(segs) > n:
             gaps = [segs[i + 1][0] - segs[i][1] for i in range(len(segs) - 1)]
@@ -174,20 +216,136 @@ class HandwritingLibrary:
                 for m in range(k):
                     new.append([cuts[m], cuts[m + 1], m > 0 or s[2], m < k - 1 or s[3]])
             segs = new
-        if len(segs) != n:
+        return segs, quality
+
+    def _learn_word(self, page, rect, label, src=None):
+        label = "".join(c for c in label if not c.isspace())
+        if not label or rect.height < 3:
+            return
+        Hw = rect.height
+        pad = Hw * 0.35
+        clip = fitz.Rect(rect.x0 - 1, rect.y0 - pad, rect.x1 + 1, rect.y1 + pad) & page.rect
+        ink, alpha, rgb = self._ink(page, clip)
+        if ink.mean() < 0.005:
+            return
+        dark = rgb[ink]
+        if len(dark):
+            lum = dark.mean(axis=1)
+            core = dark[lum <= np.percentile(lum, 35)]
+            self.inks.append(core.mean(axis=0).tolist())
+        box_top_px = (rect.y0 - clip.y0) * S
+        Hpx = Hw * S
+        segs, quality = self._split(ink, len(label), Hpx)
+        if len(segs) != len(label):
             return
         for ch, (a, b, jl, jr) in zip(label, segs):
-            col_ink = ink[:, a:b]
-            rows = np.where(col_ink.any(axis=1))[0]
-            if len(rows) == 0:
+            g = self._cut(ink, alpha, a, b, box_top_px, Hpx, jl, jr, src,
+                          quality if (jl or jr) else max(quality, 0.8))
+            if g is None:
                 continue
-            r0, r1 = rows[0], rows[-1] + 1
-            g = Glyph(alpha[r0:r1, a:b].copy(),
-                      (r0 - box_top_px) / Hpx, (r1 - box_top_px) / Hpx, (b - a) / Hpx, jl, jr, src, quality if (jl or jr) else max(quality, 0.8))
             bucket = self.glyphs.setdefault(ch, [])
             if len(bucket) < 12:
                 bucket.append(g)
         self.words_seen += 1
+
+    @staticmethod
+    def _cut(ink, alpha, a, b, box_top_px, Hpx, jl, jr, src=None, quality=1.0, manual=False):
+        col_ink = ink[:, a:b]
+        rows = np.where(col_ink.any(axis=1))[0]
+        if len(rows) == 0:
+            return None
+        r0, r1 = rows[0], rows[-1] + 1
+        return Glyph(alpha[r0:r1, a:b].copy(), (r0 - box_top_px) / Hpx, (r1 - box_top_px) / Hpx, (b - a) / Hpx,
+                     jl, jr, src, quality, manual)
+
+    # ------------------------------------------------------------------ marking letters by hand
+    @staticmethod
+    def _line_clip(page, bbox):
+        r = fitz.Rect(bbox)
+        pad = r.height * 0.35
+        return fitz.Rect(r.x0 - 4, r.y0 - pad, r.x1 + 4, r.y1 + pad) & page.rect
+
+    def propose_segments(self, page, line):
+        """Where Calamo thinks every letter of a line is: [{x0, x1, char}] in page points.
+        Uses the reading as labels when it matches what is on the page."""
+        out = []
+        words = line.get("words") or []
+        labels = line["text"].split()
+        if words and len(words) == len(labels):
+            parts = [(fitz.Rect(w["bbox"]), lab) for w, lab in zip(words, labels)]
+        else:
+            parts = [(fitz.Rect(line["bbox"]), "".join(labels))]
+        for rect, label in parts:
+            if rect.height < 3 or rect.width < 1:
+                continue
+            clip = fitz.Rect(rect.x0 - 1, rect.y0 - rect.height * 0.35, rect.x1 + 1, rect.y1 + rect.height * 0.35) & page.rect
+            ink, _, _ = self._ink(page, clip)
+            segs, _ = self._split(ink, len(label), rect.height * S)
+            chars = list(label) if len(segs) == len(label) else [""] * len(segs)
+            for (a, b, _, _), ch in zip(segs, chars):
+                out.append({"x0": clip.x0 + a / S, "x1": clip.x0 + b / S, "char": ch})
+        out.sort(key=lambda s: s["x0"])
+        return out
+
+    def learn_manual(self, page, bbox, segments):
+        """segments: [{x0, x1, char}] in page points, each one letter or digit marked by the user.
+        Returns how many glyphs were stored."""
+        line = fitz.Rect(bbox)
+        clip = self._line_clip(page, line)
+        ink, alpha, rgb = self._ink(page, clip)
+        if not ink.any():
+            return 0
+        Hpx = max(line.height * S, 4)
+        box_top_px = (line.y0 - clip.y0) * S
+        W = ink.shape[1]
+        segs = sorted((s for s in segments if s.get("char") and not s["char"].isspace()), key=lambda s: s["x0"])
+        stored = 0
+        for s in segs:
+            a = int(np.clip(round((s["x0"] - clip.x0) * S), 0, W - 1))
+            b = int(np.clip(round((s["x1"] - clip.x0) * S), a + 1, W))
+            cols = np.where(ink[:, a:b].any(axis=0))[0]
+            if len(cols) == 0:
+                continue
+            a, b = a + cols[0], a + cols[-1] + 1            # tight to the ink
+            rows = np.where(ink[:, a:b].any(axis=1))[0]
+            # a stroke crossing the cut means the letter is joined to its neighbour
+            jl = a > 0 and bool((ink[rows, a] & ink[rows, a - 1]).any())
+            jr = b < W and bool((ink[rows, b - 1] & ink[rows, b]).any())
+            g = self._cut(ink, alpha, a, b, box_top_px, Hpx, jl, jr, "manual", 1.0, True)
+            if g is None:
+                continue
+            ch = s["char"][0]
+            bucket = self.manual.setdefault(ch, [])
+            bucket.insert(0, g)
+            del bucket[MANUAL_PER_CHAR:]
+            stored += 1
+        if stored:
+            self.heights.append(line.height)
+            dark = rgb[ink]
+            lum = dark.mean(axis=1)
+            self.inks.append(dark[lum <= np.percentile(lum, 35)].mean(axis=0).tolist())
+            self._save_manual()
+        return stored
+
+    def variants(self, ch):
+        """Every sample of a character, for the review panel."""
+        out = [{"kind": "manual", "i": i, "img": _data_url(g.alpha)} for i, g in enumerate(self.manual.get(ch, []))]
+        out += [{"kind": "auto", "i": i, "img": _data_url(g.alpha)} for i, g in enumerate(self.glyphs.get(ch, []))]
+        return out
+
+    def delete_variant(self, ch, kind, i):
+        store = self.manual if kind == "manual" else self.glyphs
+        bucket = store.get(ch, [])
+        if 0 <= i < len(bucket):
+            del bucket[i]
+        if not bucket:
+            store.pop(ch, None)
+        if kind == "manual":
+            self._save_manual()
+
+    def forget_manual(self):
+        self.manual = {}
+        self._save_manual()
 
     # ------------------------------------------------------------------ info
     def ink_color(self):
@@ -200,16 +358,15 @@ class HandwritingLibrary:
         return float(np.median(self.heights)) if self.heights else 14.0
 
     def summary(self):
-        chars = sorted(self.glyphs.keys(), key=lambda c: (not c.isalpha(), c.lower(), c))
+        chars = sorted(set(self.glyphs) | set(self.manual),
+                       key=lambda c: (0 if c.isalpha() else 1 if c.isdigit() else 2, c.lower(), c))
         out = []
         for c in chars:
-            g = self.glyphs[c][0]
-            img = Image.fromarray(255 - g.alpha)
-            buf = io.BytesIO()
-            img.save(buf, "PNG")
-            out.append({"char": c, "count": len(self.glyphs[c]),
-                        "img": "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()})
-        return {"glyphs": out, "words": self.words_seen,
+            manual = self.manual.get(c, [])
+            g = (manual or self.glyphs[c])[0]
+            out.append({"char": c, "count": len(manual) + len(self.glyphs.get(c, [])), "manual": len(manual),
+                        "img": _data_url(g.alpha)})
+        return {"glyphs": out, "words": self.words_seen, "manual": sum(len(v) for v in self.manual.values()),
                 "ink": "#%02x%02x%02x" % tuple(int(v * 255) for v in self.ink_color())}
 
     # ------------------------------------------------------------------ synthesis
@@ -242,8 +399,8 @@ class HandwritingLibrary:
         chars = [c for c in text if not c.isspace()]
         if not chars:
             return 1.0
-        ok = sum(1 for c in chars if c in self.glyphs or c.swapcase() in self.glyphs
-                 or (c in ACCENTS and ACCENTS[c][0] in self.glyphs))
+        ok = sum(1 for c in chars if self._known(c) or (c.lower() in SAME_SHAPE and self._known(c.swapcase()))
+                 or (c in ACCENTS and self._known(ACCENTS[c][0])))
         return ok / len(chars)
 
     def render(self, text, height_pt, color=None, seed=None, max_width_pt=None):
@@ -254,7 +411,7 @@ class HandwritingLibrary:
         placed, x = [], 0.0
         last = {}
         space = None
-        widths = [g.width for v in self.glyphs.values() for g in v]
+        widths = [g.width for store in (self.glyphs, self.manual) for v in store.values() for g in v]
         space = (np.median(widths) * 0.75 if widths else 0.38) * Hpx
         prev_join = False
         for ch in text:
@@ -263,13 +420,13 @@ class HandwritingLibrary:
                 prev_join = False
                 continue
             accent = None
-            variants = self.glyphs.get(ch)
-            if not variants and ch in ACCENTS and ACCENTS[ch][0] in self.glyphs:
-                variants = self.glyphs[ACCENTS[ch][0]]
+            variants = self._variants(ch)
+            if not variants and ch in ACCENTS and self._known(ACCENTS[ch][0]):
+                variants = self._variants(ACCENTS[ch][0])
                 accent = ACCENTS[ch][1]
             case_scale = 1.0
-            if not variants and ch.lower() in SAME_SHAPE and ch.swapcase() in self.glyphs:
-                variants = self.glyphs[ch.swapcase()]
+            if not variants and ch.lower() in SAME_SHAPE and self._known(ch.swapcase()):
+                variants = self._variants(ch.swapcase())
                 case_scale = 0.72 if ch.islower() else 1.38
             if variants:
                 med = float(np.median([v.width for v in variants]))

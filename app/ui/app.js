@@ -6,6 +6,8 @@ const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const PT = 4 / 3;            // css px per PDF point at 100%
 const TOOL_NAMES = { view: "Naviga", edit: "Modifica", text: "Nuovo testo", hand: "Scrittura a mano", erase: "Gomma" };
 
+const isDoubt = l => l.source === "ocr" && l.doubt > 0.4 && l.kind !== "print";
+
 const S = {
   doc: null, zoom: 1, tool: "edit", current: 0, pages: [], fonts: [], settings: {},
   hits: [], hitIdx: -1, editing: null, pop: null, handHeight: 14, handInk: "#1f2a5a", glyphCount: 0,
@@ -85,14 +87,15 @@ window.addEventListener("pywebviewready", async () => {
   $("#newFont").value = "Arial";
   fillSelect($("#ocrLang"), [["", "Lingua del sistema"], ...b.languages.map(l => [l, l])]);
   $("#ocrLang").value = S.settings.ocrLang || "";
-  $("#useAi").checked = !!S.settings.useAi;
-  $("#aiKey").value = S.settings.aiKey || "";
+  $("#autoUpdate").checked = S.settings.autoUpdate !== false;
   $("#about").textContent = `Calamo PDF Studio ${b.version}`;
+  S.version = b.version;
   renderRecent(b.recent);
   updateLearning(b.learning);
-  updateAiPill();
   setDocUI(false);
+  if (!S.settings.tutorialDone) startTour();
   if (b.startup) openPath(b.startup);
+  setTimeout(() => checkUpdate(false), 2500);
 });
 
 function fillSelect(sel, items) {
@@ -280,12 +283,13 @@ function drawOverlay(P) {
     frag.appendChild(d);
   });
   (P.data.ink || []).forEach(l => {
+    if (l.kind === "print" && l.synthetic) return;   // rewritten print is now normal text: edit it as such
     const d = document.createElement("div");
-    d.className = "ink" + (l.doubt > 0.4 && l.source === "ocr" ? " doubt" : "");
+    d.className = "ink" + (isDoubt(l) ? " doubt" : "") + (l.kind === "print" ? " print" : "");
     d.dataset.id = l.id;
-    d.title = l.text;
+    d.title = (l.kind === "print" ? "Stampato: " : "") + l.text;
     Object.assign(d.style, box(l.bbox, s, 3));
-    if (l.doubt > 0.4 && l.source === "ocr") d.innerHTML = `<span class="ink-tag">?</span>`;
+    if (isDoubt(l)) d.innerHTML = `<span class="ink-tag">?</span>`;
     frag.appendChild(d);
   });
   S.hits.forEach((h, k) => {
@@ -635,15 +639,16 @@ async function openInk(P, line, anchor) {
   if (!line) return;
   closePop();
   S.pop = { P, line, anchor, kind: "ink" };
-  $("#inkPopTitle").textContent = line.synthetic ? "Testo scritto da Calamo" : "Testo scritto a mano";
+  $("#inkPopTitle").textContent = line.synthetic ? "Testo scritto da Calamo" : line.kind === "print" ? "Testo stampato (scansione)" : "Testo scritto a mano";
   $("#readSection").hidden = !!line.synthetic;
+  setKindSwitch(line);
   $("#inkCrop").hidden = false;
   $("#inkCrop").removeAttribute("src");
   $("#inkRead").value = line.text;
   setSrcBadge($("#inkSrc"), line);
   $("#inkNew").value = line.text;
   $("#inkColor").value = S.handInk;
-  $("#inkApply").querySelector("span").textContent = "Applica con la tua calligrafia";
+  $("#inkApply").querySelector("span").textContent = line.kind === "print" ? "Applica come testo stampato" : "Applica con la tua calligrafia";
   $("#inkPop").hidden = false;
   positionPop();
   highlightInkItem(line.id);
@@ -668,10 +673,15 @@ function openHandNew(P, pt, e) {
   previewHand();
   $("#inkNew").focus();
 }
+function setKindSwitch(line) {
+  $$("#inkKind button").forEach(b => b.classList.toggle("active", b.dataset.kind === (line.kind || "hand")));
+  $("#inkLetters").disabled = line.kind === "print";
+}
 function setSrcBadge(el, l) {
-  const map = { ocr: ["OCR", "src-ocr"], ai: ["AI", "src-ai"], learned: ["Appreso", "src-learned"], user: ["Tu", "src-user"] };
+  const map = { ocr: ["OCR", "src-ocr"], learned: ["Appreso", "src-learned"], user: ["Tu", "src-user"] };
   let [t, c] = map[l.source] || map.ocr;
-  if (l.source === "ocr" && l.doubt > 0.4) { t = "Da verificare"; c = "src-doubt"; }
+  if (isDoubt(l)) { t = "Da verificare"; c = "src-doubt"; }
+  if (l.kind === "print" && !l.synthetic) { t = "Stampato"; c = "src-print"; }
   el.textContent = t;
   el.className = "src-badge " + c;
 }
@@ -681,6 +691,12 @@ const previewHand = debounce(async () => {
   const img = $("#inkPreview");
   if (!text.trim()) { img.hidden = true; $("#inkPreviewEmpty").hidden = false; $("#inkCoverage").textContent = ""; return; }
   const h = S.pop.line ? S.pop.line.bbox[3] - S.pop.line.bbox[1] : S.handHeight;
+  if (S.pop.line && S.pop.line.kind === "print") {
+    img.hidden = true; $("#inkPreviewEmpty").hidden = false; $("#inkCoverage").textContent = "";
+    $("#inkPreviewEmpty").textContent = "Verrà scritto come testo stampato";
+    return;
+  }
+  $("#inkPreviewEmpty").textContent = "Anteprima";
   try {
     const r = await call("preview_hand", text, h, $("#inkColor").value);
     if (!r) return;
@@ -742,6 +758,31 @@ $("#inkApply").onclick = async () => {
 document.addEventListener("mousedown", e => {
   if (S.pop && !e.target.closest("#inkPop, .ink, .page, .modal")) closePop();
 });
+$$("#inkKind button").forEach(b => b.onclick = async () => {
+  const p = S.pop;
+  if (!p || !p.line) return;
+  await guarded(async () => {
+    await setInkKind(p.P.i, p.line.id, b.dataset.kind);
+    p.line = (S.inkCache[p.P.i] || []).find(l => l.id === p.line.id) || p.line;
+    openInk(p.P, p.line, p.anchor);
+  });
+});
+$("#inkLetters").onclick = () => {
+  const p = S.pop;
+  if (!p || !p.line) return;
+  closePop();
+  openLetters(p.P.i, p.line.id);
+};
+async function setInkKind(page, id, kind) {
+  const r = await call("set_ink_kind", page, id, kind);
+  S.inkCache[page] = r.ink;
+  const P = S.pages[page];
+  if (P.data) { P.data.ink = r.ink; drawOverlay(P); }
+  applyHand(r.hand);
+  renderInkList();
+  toast(kind === "print" ? "Riga segnata come stampata: non verrà usata per la calligrafia." :
+    "Riga segnata come scritta a mano: le sue lettere entrano nella calligrafia.", "ok");
+}
 
 // ---------------------------------------------------------------- recognition panel
 function renderInkList() {
@@ -756,13 +797,16 @@ function renderInkList() {
   list.innerHTML = "";
   ink.forEach(l => {
     const it = document.createElement("div");
-    const doubt = l.source === "ocr" && l.doubt > 0.4;
+    const doubt = isDoubt(l);
     it.className = "ink-item" + (doubt ? " doubt" : "");
     it.dataset.id = l.id;
-    it.innerHTML = `<div class="ii-top"><span class="src-badge"></span><span class="grow">${l.synthetic ? "riscritto" : ""}</span>
+    const canMark = !l.synthetic && l.kind !== "print";
+    const asText = l.synthetic && l.kind === "print";    // now ordinary text on the page
+    it.innerHTML = `<div class="ii-top"><span class="src-badge"></span><span class="grow">${asText ? "riscritto · si modifica come testo" : l.synthetic ? "riscritto" : ""}</span>
       <button class="icon-btn" data-a="show" title="Mostra nella pagina"><svg><use href="#i-search"/></svg></button>
-      <button class="icon-btn" data-a="rewrite" title="Riscrivi con la calligrafia"><svg><use href="#i-pen"/></svg></button></div>
-      <input value="${esc(l.text)}" spellcheck="false">
+      ${canMark ? `<button class="icon-btn" data-a="letters" title="Segna lettere e numeri"><svg><use href="#i-letters"/></svg></button>` : ""}
+      ${asText ? "" : `<button class="icon-btn" data-a="rewrite" title="Riscrivi"><svg><use href="#i-pen"/></svg></button>`}</div>
+      <input value="${esc(l.text)}" spellcheck="false"${asText ? " readonly" : ""}>
       <div class="ii-actions" hidden><button class="btn ghost sm" data-a="teach"><svg><use href="#i-learn"/></svg>Insegna lettura</button></div>`;
     setSrcBadge($(".src-badge", it), l);
     const input = $("input", it), acts = $(".ii-actions", it);
@@ -770,7 +814,8 @@ function renderInkList() {
     input.addEventListener("keydown", e => { if (e.key === "Enter") $("[data-a=teach]", it).click(); e.stopPropagation(); });
     $("[data-a=teach]", it).onclick = () => guarded(() => teach(S.current, l.id, input.value.trim()));
     $("[data-a=show]", it).onclick = () => flashInk(S.current, l.id);
-    $("[data-a=rewrite]", it).onclick = () => {
+    if (canMark) $("[data-a=letters]", it).onclick = () => openLetters(S.current, l.id);
+    if (!asText) $("[data-a=rewrite]", it).onclick = () => {
       const P = S.pages[S.current];
       flashInk(S.current, l.id);
       setTimeout(() => {
@@ -794,7 +839,7 @@ function flashInk(page, id) {
 async function analyze(all) {
   if (!S.doc) return;
   const pages = all ? S.pages.map(P => P.i) : [S.current];
-  let warned = false, found = 0;
+  let found = 0;
   try {
     for (let k = 0; k < pages.length; k++) {
       const i = pages[k];
@@ -805,14 +850,14 @@ async function analyze(all) {
       const P = S.pages[i];
       if (P.data) { P.data.ink = r.ink; drawOverlay(P); }
       applyHand(r.hand);
-      if (r.aiError && !warned) { warned = true; toast("Lettura AI non disponibile, uso l'OCR locale: " + r.aiError, "warn"); }
     }
     S.doc = await call("info");
     renderInkList();
     if (!found) toast("Non ho trovato scrittura a mano o testo scansionato.", "");
     else {
-      const doubt = Object.values(S.inkCache).flat().filter(l => l.source === "ocr" && l.doubt > 0.4).length;
-      toast(`Ho letto ${found} righe${doubt ? `, ${doubt} da verificare (segnate in rosso)` : ""}. Cliccale per correggere o riscrivere.`, "ok");
+      const all = Object.values(S.inkCache).flat();
+      const doubt = all.filter(isDoubt).length, printed = all.filter(l => l.kind === "print").length;
+      toast(`Ho letto ${found} righe${printed ? `, ${printed} stampate (in grigio)` : ""}${doubt ? `, ${doubt} da verificare (in rosso)` : ""}. Cliccale per correggere o riscrivere.`, "ok");
       if (S.tool !== "edit") setTool("edit");
       $$("#tabs button")[0].click();
     }
@@ -823,8 +868,12 @@ function applyHand(h) {
   S.glyphCount = h.glyphs.length;
   S.handInk = h.ink;
   $("#inkSwatch").style.background = h.ink;
-  $("#handMeta").textContent = h.glyphs.length ? `${h.glyphs.length} caratteri appresi da ${h.words} parole` : "Nessuna lettera appresa";
-  $("#glyphs").innerHTML = h.glyphs.map(g => `<div class="glyph" title="“${esc(g.char)}” · ${g.count} esempi"><img src="${g.img}"><span>${esc(g.char)}</span></div>`).join("");
+  $("#handMeta").textContent = h.glyphs.length
+    ? `${h.glyphs.length} caratteri appresi${h.words ? ` da ${h.words} parole` : ""}${h.manual ? ` · ${h.manual} segnati da te` : ""}`
+    : "Nessuna lettera appresa";
+  $("#lettersStats").textContent = h.manual ? `Hai segnato ${h.manual} lettere e numeri: restano anche negli altri documenti.` : "Nessuna lettera segnata a mano.";
+  $("#glyphs").innerHTML = h.glyphs.map(g => `<div class="glyph${g.manual ? " manual" : ""}" data-char="${esc(g.char)}" title="“${esc(g.char)}” · ${g.count} esempi${g.manual ? `, ${g.manual} segnati da te` : ""}"><img src="${g.img}"><span>${esc(g.char)}</span></div>`).join("");
+  $$("#glyphs .glyph").forEach(el => el.onclick = () => openGlyph(el.dataset.char));
 }
 async function refreshHand() {
   try {
@@ -841,11 +890,233 @@ function updateLearning(st) {
   $("#learnStats").textContent = txt;
   $("#learnMeta").textContent = txt;
 }
-function updateAiPill() {
-  const on = S.settings.useAi && S.settings.aiKey;
-  const pill = $("#aiPill");
-  pill.className = "ai-pill" + (on ? " on" : "");
-  pill.innerHTML = `<i></i>${on ? "Lettura avanzata con Claude attiva" : "Lettura locale (OCR di Windows) · attiva l'AI nelle impostazioni"}`;
+
+// ---------------------------------------------------------------- glyph samples
+async function openGlyph(ch) {
+  await guarded(async () => {
+    S.glyphChar = ch;
+    renderGlyphVariants(await call("glyph_variants", ch));
+    $("#glyphModal").hidden = false;
+  });
+}
+function renderGlyphVariants(list) {
+  const ch = S.glyphChar;
+  $("#glyphTitle").textContent = `Esempi di “${ch}”`;
+  const box = $("#glyphVariants");
+  if (!list.length) { box.innerHTML = `<div class="empty">Nessun esempio rimasto.</div>`; return; }
+  box.innerHTML = list.map(v => `<div class="glyph${v.kind === "manual" ? " manual" : ""}"><img src="${v.img}">
+    <button data-kind="${v.kind}" data-i="${v.i}" title="Elimina questo esempio"><svg><use href="#i-trash"/></svg></button></div>`).join("");
+  $$("button", box).forEach(b => b.onclick = () => guarded(async () => {
+    const r = await call("delete_glyph", ch, b.dataset.kind, +b.dataset.i);
+    applyHand(r.hand);
+    renderGlyphVariants(r.variants);
+  }));
+}
+
+// ---------------------------------------------------------------- marking letters one by one
+const L = { data: null, segs: [], sel: -1, k: 1, page: 0, id: 0 };
+async function openLetters(page, id) {
+  await guarded(async () => {
+    const d = await call("ink_letters", page, id);
+    Object.assign(L, { data: d, page, id, sel: -1, segs: d.segments.map(x => ({ ...x })) });
+    const img = $("#lettersImg");
+    $("#lettersBoxes").innerHTML = "";
+    $("#lettersModal").hidden = false;
+    img.removeAttribute("src");
+    img.onload = () => {
+      L.k = img.clientWidth / (d.rect[2] - d.rect[0]);
+      L.sel = L.segs.findIndex(x => !x.char);
+      drawLetters();
+      $("#lettersStage").scrollLeft = 0;
+    };
+    img.src = d.img;
+    $("#lettersUpdateText").checked = true;
+  }, "Preparazione delle lettere…");
+}
+function drawLetters() {
+  const wrap = $("#lettersBoxes"), x0 = L.data.rect[0];
+  wrap.innerHTML = "";
+  L.segs.forEach((sg, i) => {
+    const b = document.createElement("div");
+    b.className = "lbox" + (sg.char ? "" : " empty") + (i === L.sel ? " sel" : "");
+    b.style.left = (sg.x0 - x0) * L.k + "px";
+    b.style.width = Math.max((sg.x1 - sg.x0) * L.k, 4) + "px";
+    b.dataset.i = i;
+    b.innerHTML = `<i class="lh l"></i><i class="lh r"></i><span class="lc">${sg.char ? esc(sg.char) : "?"}</span>`;
+    wrap.appendChild(b);
+  });
+  const done = L.segs.filter(x => x.char).length;
+  $("#lettersCount").textContent = `${done} di ${L.segs.length} riquadri con un carattere`;
+  if (document.activeElement !== $("#lettersSeq")) $("#lettersSeq").value = L.segs.map(x => x.char || "?").join("");
+  const sel = $(".lbox.sel", wrap);
+  if (sel) sel.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+function lettersPoint(e) {
+  const r = $("#lettersCanvas").getBoundingClientRect();
+  return L.data.rect[0] + (e.clientX - r.left) / L.k;
+}
+$("#lettersCanvas").addEventListener("mousedown", e => {
+  if (e.button !== 0 || !L.data) return;
+  e.preventDefault();
+  const boxEl = e.target.closest(".lbox"), handle = e.target.closest(".lh");
+  const minW = 1.5 / L.k * 4;
+  if (handle) {
+    const i = +boxEl.dataset.i, left = handle.classList.contains("l"), sg = L.segs[i];
+    L.sel = i;
+    const move = ev => {
+      const x = lettersPoint(ev);
+      if (left) sg.x0 = Math.min(Math.max(x, i > 0 ? L.segs[i - 1].x0 + minW : L.data.rect[0]), sg.x1 - minW);
+      else sg.x1 = Math.max(Math.min(x, i < L.segs.length - 1 ? L.segs[i + 1].x1 - minW : L.data.rect[2]), sg.x0 + minW);
+      // neighbours give way
+      if (left && i > 0 && L.segs[i - 1].x1 > sg.x0) L.segs[i - 1].x1 = sg.x0;
+      if (!left && i < L.segs.length - 1 && L.segs[i + 1].x0 < sg.x1) L.segs[i + 1].x0 = sg.x1;
+      drawLetters();
+    };
+    const up = () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+    drawLetters();
+    return;
+  }
+  if (boxEl) { L.sel = +boxEl.dataset.i; drawLetters(); return; }
+  // drag on empty space: a new box
+  const a = lettersPoint(e);
+  const sg = { x0: a, x1: a + minW, char: "" };
+  L.segs.push(sg);
+  L.segs.sort((p, q) => p.x0 - q.x0);
+  L.sel = L.segs.indexOf(sg);
+  const move = ev => {
+    const x = lettersPoint(ev);
+    sg.x0 = Math.min(a, x); sg.x1 = Math.max(a, x, sg.x0 + minW);
+    L.segs.sort((p, q) => p.x0 - q.x0);
+    L.sel = L.segs.indexOf(sg);
+    drawLetters();
+  };
+  const up = () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
+  window.addEventListener("mousemove", move);
+  window.addEventListener("mouseup", up);
+  drawLetters();
+});
+document.addEventListener("keydown", e => {
+  if ($("#lettersModal").hidden) return;
+  if (e.target === $("#lettersSeq")) return;
+  e.stopPropagation();
+  if (e.key === "Escape") { e.preventDefault(); return cmd("lettersClose"); }
+  if (e.key === "Enter") { e.preventDefault(); return cmd("lettersSave"); }
+  if (!L.segs.length) return;
+  if (e.key === "ArrowRight" || e.key === "Tab") { e.preventDefault(); L.sel = Math.min(L.sel + 1, L.segs.length - 1); return drawLetters(); }
+  if (e.key === "ArrowLeft") { e.preventDefault(); L.sel = Math.max(L.sel - 1, 0); return drawLetters(); }
+  if (L.sel < 0) return;
+  if (e.key === "Delete") { e.preventDefault(); return cmd("letterDelete"); }
+  if (e.key === "Backspace") { e.preventDefault(); L.segs[L.sel].char = ""; L.sel = Math.max(L.sel - 1, 0); return drawLetters(); }
+  if (e.key.length === 1 && e.key !== " " && !e.ctrlKey && !e.altKey) {
+    e.preventDefault();
+    L.segs[L.sel].char = e.key;
+    if (L.sel < L.segs.length - 1) L.sel++;
+    drawLetters();
+  }
+}, true);
+$("#lettersSeq").addEventListener("input", e => {
+  const chars = [...e.target.value.replace(/\s/g, "")];
+  L.segs.forEach((sg, i) => { sg.char = chars[i] && chars[i] !== "?" ? chars[i] : ""; });
+  drawLetters();
+});
+$("#lettersSeq").addEventListener("keydown", e => {
+  if (e.key === "Enter") { e.preventDefault(); cmd("lettersSave"); }
+  if (e.key === "Escape") { e.preventDefault(); cmd("lettersClose"); }
+  e.stopPropagation();
+});
+const LETTER_COMMANDS = {
+  letterSplit() {
+    const sg = L.segs[L.sel];
+    if (!sg) return toast("Seleziona prima un riquadro.", "warn");
+    const mid = (sg.x0 + sg.x1) / 2;
+    L.segs.splice(L.sel + 1, 0, { x0: mid, x1: sg.x1, char: "" });
+    sg.x1 = mid;
+    L.sel++;
+    drawLetters();
+  },
+  letterMerge() {
+    const sg = L.segs[L.sel], nx = L.segs[L.sel + 1];
+    if (!sg || !nx) return toast("Seleziona un riquadro che abbia un riquadro dopo di sé.", "warn");
+    sg.x1 = nx.x1;
+    sg.char = sg.char || nx.char;
+    L.segs.splice(L.sel + 1, 1);
+    drawLetters();
+  },
+  letterDelete() {
+    if (L.sel < 0 || !L.segs[L.sel]) return;
+    L.segs.splice(L.sel, 1);
+    L.sel = Math.min(L.sel, L.segs.length - 1);
+    drawLetters();
+  },
+  letterReset() {
+    L.segs = L.data.segments.map(x => ({ ...x }));
+    L.sel = L.segs.findIndex(x => !x.char);
+    drawLetters();
+  },
+  lettersClose() { $("#lettersModal").hidden = true; L.data = null; },
+  async lettersSave() {
+    const marked = L.segs.filter(x => x.char);
+    if (!marked.length) return toast("Scrivi almeno un carattere in un riquadro.", "warn");
+    const missing = L.segs.length - marked.length;
+    if (missing) {
+      const ok = await modal("Riquadri senza carattere", `${missing} riquadri non hanno un carattere e verranno ignorati. Continuare?`,
+        [["Torna indietro", false, "ghost"], ["Salva comunque", true, "primary"]]);
+      if (!ok) return;
+    }
+    const { page, id } = L;
+    await guarded(async () => {
+      const r = await call("teach_letters", page, id, L.segs, $("#lettersUpdateText").checked);
+      $("#lettersModal").hidden = true;
+      L.data = null;
+      S.inkCache[page] = r.ink;
+      const P = S.pages[page];
+      if (P.data) { P.data.ink = r.ink; drawOverlay(P); }
+      applyHand(r.hand);
+      updateLearning(r.stats);
+      renderInkList();
+      toast(`Salvate ${r.stored} lettere e numeri nella tua calligrafia.`, "ok");
+    });
+  },
+};
+
+// ---------------------------------------------------------------- updates
+async function checkUpdate(manual) {
+  const st = $("#updateStatus"), act = $("#updateAction");
+  if (manual) st.textContent = "Controllo…";
+  try {
+    const u = await call("check_update");
+    S.update = u;
+    if (!u) {
+      st.textContent = manual ? `Hai già l'ultima versione (${S.version}).` : "";
+      act.hidden = true;
+      return;
+    }
+    if (u.ready) {
+      window.app.updateReady(u, true);
+    } else if (u.downloading) {
+      st.textContent = `Versione ${u.version}: download in corso…`;
+      status(`Scaricamento aggiornamento ${u.version}…`);
+      act.hidden = true;
+    } else if (u.canInstall) {
+      st.textContent = `È disponibile la versione ${u.version}.`;
+      act.textContent = "Scarica e installa"; act.hidden = false;
+      act.onclick = () => guarded(async () => { act.hidden = true; await call("download_update"); st.textContent = "Download in corso…"; });
+      if (!manual) toast(`È disponibile Calamo ${u.version}.`, "", { label: "Aggiorna", run: () => act.click() });
+    } else {
+      st.textContent = `È disponibile la versione ${u.version}.`;
+      act.textContent = "Apri la pagina di download"; act.hidden = false;
+      act.onclick = () => call("open_release_page");
+      if (!manual) toast(`È disponibile Calamo ${u.version}.`, "", { label: "Scarica", run: () => call("open_release_page") });
+    }
+  } catch (e) {
+    if (manual) st.textContent = "Impossibile contattare GitHub: " + e.message.slice(0, 80);
+  }
+}
+async function restartToUpdate() {
+  closeEditor(true);
+  if (await confirmDiscard()) await guarded(() => call("restart_to_update"));
 }
 
 // ---------------------------------------------------------------- search
@@ -925,11 +1196,13 @@ const COMMANDS = {
     if (ok) guarded(async () => afterChange(await call("delete_page", S.current)));
   },
   inkClose: closePop,
-  testAi: async () => {
-    const key = $("#aiKey").value.trim();
-    $("#aiTest").textContent = "Verifica…";
-    try { await call("test_ai", key); $("#aiTest").textContent = "✓ Chiave valida"; }
-    catch (e) { $("#aiTest").textContent = "✕ " + e.message.slice(0, 80); }
+  ...LETTER_COMMANDS,
+  glyphClose: () => { $("#glyphModal").hidden = true; },
+  checkUpdate: () => checkUpdate(true),
+  tutorial: () => startTour(),
+  forgetLetters: async () => {
+    const ok = await modal("Dimenticare le lettere segnate?", "Calamo cancellerà tutte le lettere e i numeri che hai segnato a mano.", [["Annulla", false, "ghost"], ["Dimentica", true, "primary"]]);
+    if (ok) guarded(async () => applyHand(await call("forget_letters")));
   },
   resetLearning: async () => {
     const ok = await modal("Dimenticare le correzioni?", "Calamo cancellerà tutte le letture che gli hai insegnato.", [["Annulla", false, "ghost"], ["Dimentica", true, "primary"]]);
@@ -956,11 +1229,10 @@ $("#newBold").onclick = e => { S.newStyle.bold = e.currentTarget.classList.toggl
 $("#newItalic").onclick = e => { S.newStyle.italic = e.currentTarget.classList.toggle("on"); };
 
 // settings
-function saveSetting(k, v) { S.settings[k] = v; call("set_settings", { [k]: v }).catch(() => {}); updateAiPill(); }
+function saveSetting(k, v) { S.settings[k] = v; call("set_settings", { [k]: v }).catch(() => {}); }
 $$("#themeSwitch button").forEach(b => b.onclick = () => { applyTheme(b.dataset.theme); saveSetting("theme", b.dataset.theme); });
 $("#ocrLang").onchange = e => saveSetting("ocrLang", e.target.value);
-$("#useAi").onchange = e => saveSetting("useAi", e.target.checked);
-$("#aiKey").onchange = e => saveSetting("aiKey", e.target.value.trim());
+$("#autoUpdate").onchange = e => saveSetting("autoUpdate", e.target.checked);
 
 // window controls
 $$(".win-btn").forEach(b => b.onclick = async () => {
@@ -989,6 +1261,13 @@ document.addEventListener("keydown", e => {
     }
     return;
   }
+  if (!$("#tour").hidden) {
+    if (e.key === "ArrowRight" || e.key === "Enter") { e.preventDefault(); $("#tourNext").click(); }
+    if (e.key === "ArrowLeft") { e.preventDefault(); $("#tourPrev").click(); }
+    if (e.key === "Escape") { e.preventDefault(); endTour(); }
+    return;
+  }
+  if (e.key === "Escape" && !$("#glyphModal").hidden) { $("#glyphModal").hidden = true; return; }
   if (typing || !S.doc) return;
   const tools = { n: "view", m: "edit", t: "text", h: "hand", e: "erase" };
   if (tools[k]) setTool(tools[k]);
@@ -1019,9 +1298,64 @@ document.addEventListener("dragleave", e => { if (!e.relatedTarget) document.bod
 document.addEventListener("drop", e => { e.preventDefault(); document.body.classList.remove("drag-over"); });
 window.addEventListener("resize", debounce(() => { positionEditBar(); positionPop(); }, 50));
 
+// ---------------------------------------------------------------- first-run tutorial
+const TOUR = [
+  { icon: "logo", title: "Benvenuto in Calamo PDF Studio",
+    text: "Modifica i PDF come un documento Word, anche le parti scritte a mano. In pochi passi ti mostro come si usa. Puoi rivedere questa guida quando vuoi da Impostazioni → Guida." },
+  { icon: "i-open", title: "Apri un documento", keys: ["Ctrl", "O"],
+    text: "Premi “Apri un PDF” oppure trascina un file nella finestra. Le pagine compaiono a sinistra; zoom con Ctrl + rotellina." },
+  { icon: "i-edit", title: "Modifica il testo", keys: ["M"],
+    text: "Con lo strumento Modifica clicca una frase e riscrivila sul posto: font, dimensione e colore restano quelli originali. Ctrl+Invio applica, Esc annulla." },
+  { icon: "i-sparkle", title: "Leggi la scrittura a mano",
+    text: "Premi “Leggi scrittura”. Le righe scritte a mano sono evidenziate in blu, quelle stampate in grigio (non vengono usate per la calligrafia), quelle dubbie in rosso con un “?”." },
+  { icon: "i-letters", title: "Correggi e segna le lettere",
+    text: "Clicca una riga per correggerne la lettura. Con “Segna lettere” indichi dove si trova ogni lettera e numero: Calamo li ricorda anche negli altri documenti e la calligrafia diventa sempre più completa." },
+  { icon: "i-pen", title: "Scrivi con la tua calligrafia", keys: ["H"],
+    text: "Con lo strumento A mano clicca un punto della pagina e scrivi: il testo viene composto con le lettere apprese, nello stesso inchiostro. Poi salva o esporta in Word ed Excel." },
+  { icon: "i-download", title: "Sempre aggiornato",
+    text: "Quando su GitHub esce una nuova versione, Calamo la scarica da solo e la installa alla chiusura. Puoi disattivarlo nelle Impostazioni." },
+];
+let tourIdx = 0;
+function startTour() { tourIdx = 0; $("#tour").hidden = false; drawTour(); }
+function drawTour() {
+  const t = TOUR[tourIdx];
+  $("#tourArt").innerHTML = `<svg><use href="#${t.icon}"/></svg>` +
+    (t.keys ? `<div class="tour-keys">${t.keys.map(k => `<kbd>${k}</kbd>`).join("<span class='muted'>+</span>")}</div>` : "");
+  $("#tourStep").textContent = `Passo ${tourIdx + 1} di ${TOUR.length}`;
+  $("#tourTitle").textContent = t.title;
+  $("#tourText").textContent = t.text;
+  $("#tourDots").innerHTML = TOUR.map((_, i) => `<i class="${i === tourIdx ? "on" : ""}"></i>`).join("");
+  $("#tourPrev").hidden = tourIdx === 0;
+  $("#tourSkip").hidden = tourIdx === TOUR.length - 1;
+  $("#tourNext").textContent = tourIdx === TOUR.length - 1 ? "Inizia" : "Avanti";
+}
+function endTour() {
+  $("#tour").hidden = true;
+  if (!S.settings.tutorialDone) saveSetting("tutorialDone", true);
+}
+$("#tourNext").onclick = () => { if (tourIdx < TOUR.length - 1) { tourIdx++; drawTour(); } else endTour(); };
+$("#tourPrev").onclick = () => { if (tourIdx > 0) { tourIdx--; drawTour(); } };
+$("#tourSkip").onclick = endTour;
+
 // API used by Python
 window.app = {
   progress(label, i, n) { busy(`${label}… ${i + 1}/${n}`, (i + 1) / n); },
   requestClose,
   openPath,
+  updateProgress(f) {
+    const v = S.update ? S.update.version : "";
+    status(`Scaricamento aggiornamento ${v}… ${Math.round(f * 100)}%`);
+    $("#updateStatus").textContent = `Versione ${v}: download ${Math.round(f * 100)}%`;
+  },
+  updateReady(u, quiet) {
+    status(`Aggiornamento ${u.version} pronto: verrà installato alla chiusura`);
+    $("#updateStatus").textContent = `Versione ${u.version} pronta: verrà installata alla chiusura.`;
+    const act = $("#updateAction");
+    act.textContent = "Riavvia e aggiorna ora"; act.hidden = false; act.onclick = restartToUpdate;
+    if (!quiet) toast(`Calamo ${u.version} è pronto. Verrà installato alla chiusura.`, "ok", { label: "Riavvia ora", run: restartToUpdate });
+  },
+  updateFailed(msg) {
+    status("");
+    $("#updateStatus").textContent = "Aggiornamento non riuscito: " + msg;
+  },
 };

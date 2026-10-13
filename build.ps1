@@ -1,4 +1,4 @@
-# Builds CalamoPDF.exe (copied to the project root) and the Windows installer in dist\
+# Builds CalamoPDF.exe (copied to the project root, not tracked) and the Windows installer in dist\
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
