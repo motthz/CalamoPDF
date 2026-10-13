@@ -188,9 +188,10 @@
             <button class="btn ghost sm grow" data-cmd="analyzeAll" data-need-doc>Tutto il documento</button>
           </div>
           <div class="legend">
-            <span><i class="lg-hand"></i>Scritto a mano</span>
+            <span><i class="lg-hand"></i>A mano (un colore per persona)</span>
             <span><i class="lg-print"></i>Stampato</span>
             <span><i class="lg-doubt"></i>Da verificare</span>
+            <span><i class="lg-unread"></i>Non letto</span>
           </div>
         </div>
 
@@ -199,11 +200,16 @@
           <div class="empty">Nessuna analisi per questa pagina.<br>Premi <b>Analizza pagina</b> per leggere la scrittura a mano.</div>
         </div>
 
-        <div class="section-title">Calligrafia di questa pagina <span class="muted" id="handPageLabel"></span></div>
+        <div class="section-title">Scritture di questa pagina <span class="muted" id="handPageLabel"></span></div>
+        <p class="muted small writings-hint">Trascina una scrittura su un'altra se sono la stessa persona.</p>
+        <div class="writings" id="writingList"><div class="empty small">Analizza la pagina: Calamo separa le scritture di persone diverse e lo stampato.</div></div>
         <div class="card">
+          <div class="style-head"><b id="styleName">—</b><span class="kind-tag" id="styleKind"></span>
+            <button class="icon-btn" data-cmd="renameStyle" data-need-doc title="Rinomina (es. chi ha scritto)"><svg><use href="#i-edit"/></svg></button>
+            <button class="icon-btn" data-cmd="splitStyle" data-need-doc title="Dividi in due: questa scrittura mescola due persone"><svg><use href="#i-split"/></svg></button></div>
           <div class="hand-meta"><span class="ink-swatch" id="inkSwatch"></span><span id="handMeta" class="muted small">Nessuna lettera appresa</span></div>
           <div class="glyphs" id="glyphs"></div>
-          <p class="muted small glyph-hint">Ogni pagina ha la sua calligrafia: può averla scritta una persona diversa. Clicca una lettera per vederne gli esempi ed eliminare quelli sbagliati.</p>
+          <p class="muted small glyph-hint">Ogni scrittura (persona o carattere stampato) ha le sue lettere: una riga viene sempre riscritta con le lettere della sua scrittura. Clicca una lettera per vederne gli esempi ed eliminare quelli sbagliati.</p>
           <div class="style-row" id="styleLoaded" hidden></div>
           <div class="row gap wrap style-actions">
             <button class="btn ghost sm" data-cmd="saveStyle" data-need-doc title="Ricorda questa calligrafia con un nome, per usarla su altre pagine o documenti"><svg><use href="#i-save"/></svg>Ricorda…</button>
@@ -256,6 +262,10 @@
         <div class="card form">
           <label>Lingua OCR<select id="ocrLang"></select></label>
           <p class="muted small">Il riconoscimento di base usa il motore OCR integrato in Windows e funziona offline.</p>
+          <label class="switch-row"><span>Lettore dedicato alla scrittura a mano</span><input type="checkbox" id="handModel" class="switch"></label>
+          <div class="row gap"><button class="btn ghost sm" id="modelAction" hidden><svg><use href="#i-download"/></svg>Scarica il lettore</button><span class="muted small" id="modelStatus"></span></div>
+          <div class="bar model-bar" id="modelBar" hidden><i></i></div>
+          <p class="muted small">Un modello che legge le righe scritte a mano molto meglio dell'OCR di Windows. Si scarica una sola volta (circa 60 MB), poi funziona offline sul tuo PC.</p>
         </div>
         <div class="section-title">Aggiornamenti</div>
         <div class="card form">
@@ -288,6 +298,7 @@
     <span class="st-sep"></span>
     <span id="stTool">Modifica</span>
     <span class="grow"></span>
+    <span class="st-task" id="stTask" hidden><span class="spinner xs"></span><span id="stTaskText"></span><span class="st-bar"><i id="stTaskBar"></i></span><button class="st-cancel" id="stTaskCancel" title="Interrompi la lettura">Interrompi</button></span>
     <span id="stMsg"></span>
   </footer>
 </div>
@@ -317,8 +328,12 @@
     <label class="pop-label">Calamo ha letto <span class="src-badge" id="inkSrc"></span></label>
     <div class="row gap"><input id="inkRead" spellcheck="false"><button class="btn ghost sm" id="inkTeach" title="Insegna la lettura corretta"><svg><use href="#i-learn"/></svg>Correggi</button></div>
     <p class="muted small">Se la lettura è sbagliata, scrivi cosa c'è davvero: Calamo lo ricorderà e imparerà meglio le lettere.</p>
+    <div class="row gap kind-row">
+      <label class="pop-label" for="inkStyle">Scrittura</label>
+      <select id="inkStyle" title="Di chi è questa riga: le lettere usate per riscriverla vengono da questa scrittura"></select>
+    </div>
     <div class="row gap between kind-row">
-      <div class="seg-switch" id="inkKind">
+      <div class="seg-switch" id="inkKind" title="Vale per tutte le righe di questa scrittura">
         <button data-kind="hand"><svg><use href="#i-pen"/></svg>A mano</button>
         <button data-kind="print"><svg><use href="#i-print"/></svg>Stampato</button>
       </div>
@@ -326,8 +341,12 @@
     </div>
   </div>
   <div class="pop-section">
+    <div class="row gap kind-row" id="newStyleRow" hidden>
+      <label class="pop-label" for="newStyle">Scrivi come</label>
+      <select id="newStyle"></select>
+    </div>
     <label class="pop-label">Nuovo testo</label>
-    <textarea id="inkNew" rows="2" spellcheck="false"></textarea>
+    <textarea id="inkNew" rows="2" spellcheck="false" placeholder="Maiusc+Invio per andare a capo"></textarea>
     <div class="preview-box"><img id="inkPreview" alt=""><span class="muted small" id="inkPreviewEmpty">Anteprima</span></div>
     <div class="row gap between">
       <div class="row gap"><input type="color" id="inkColor" title="Colore inchiostro"><span class="muted small" id="inkCoverage"></span></div>

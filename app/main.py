@@ -19,12 +19,13 @@ sys.path.insert(0, BASE)
 from engine import export  # noqa: E402
 from engine import fonts as F  # noqa: E402
 from engine import handwriting as HW  # noqa: E402
+from engine.handreader import READER  # noqa: E402
 from engine.document import Session  # noqa: E402
 from engine.ocr import available_languages  # noqa: E402
 from engine.storage import load_json, save_json  # noqa: E402
 import updater  # noqa: E402
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 _user32 = ctypes.windll.user32
 _user32.FindWindowW.restype = wintypes.HWND
@@ -40,7 +41,7 @@ class _MONITORINFO(ctypes.Structure):
     _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT), ("rcWork", wintypes.RECT),
                 ("dwFlags", wintypes.DWORD)]
 SETTINGS_DEFAULT = {"theme": "dark", "ocrLang": "", "recent": [], "tutorialDone": False, "autoUpdate": True,
-                    "updateTried": ""}
+                    "updateTried": "", "handModel": True}
 OBSOLETE_SETTINGS = ("aiKey", "useAi")
 
 
@@ -78,6 +79,11 @@ class Api:
         self._closing_ok = False
         self._max = False
         self._restore_rect = None
+        self._cancel_gen = 0             # bumped to stop the page readings in progress
+        self._model = {"downloading": False, "progress": 0.0, "error": None}
+        # the dictionary takes a moment to load: do it now, not on the first page read
+        from engine.lexicon import LEXICON
+        threading.Thread(target=LEXICON._load, daemon=True).start()
         self.startup_path = next((a for a in sys.argv[1:] if a.lower().endswith(".pdf") and os.path.exists(a)), None)
 
     # ---------------------------------------------------------------- helpers
@@ -367,9 +373,48 @@ class Api:
         return self._s.replace_all(term, repl)
 
     # ---------------------------------------------------------------- handwriting
+    def _reader(self):
+        if not self._settings.get("handModel", True) or not READER.installed() or not READER.runtime_ok():
+            return None
+        return READER
+
     @safe
     def analyze(self, index):
-        return self._s.analyze(index, self._settings.get("ocrLang") or None)
+        gen = self._cancel_gen
+        return self._s.analyze(index, self._settings.get("ocrLang") or None, reader=self._reader(),
+                               cancelled=lambda: gen != self._cancel_gen)
+
+    @safe
+    def cancel_analysis(self):
+        self._cancel_gen += 1
+        return True
+
+    # ---------------------------------------------------------------- handwriting model
+    @safe
+    def model_status(self):
+        st = READER.status()
+        return {**st, **self._model, "error": self._model["error"] or st["error"],
+                "enabled": self._settings.get("handModel", True)}
+
+    @safe
+    def model_download(self):
+        if self._model["downloading"]:
+            return True
+
+        def run():
+            self._model.update(downloading=True, progress=0.0, error=None)
+            try:
+                if READER.error:
+                    READER.remove()
+                READER.download(lambda f: self._model.update(progress=round(f, 3)))
+                READER.error = None
+            except Exception as e:
+                traceback.print_exc()
+                self._model["error"] = str(e)
+            finally:
+                self._model["downloading"] = False
+        threading.Thread(target=run, daemon=True).start()
+        return True
 
     @safe
     def set_ink_kind(self, index, line_id, kind):
@@ -384,20 +429,37 @@ class Api:
         return self._s.teach_letters(index, line_id, segments, update_text)
 
     @safe
-    def glyph_variants(self, index, char):
-        return self._s.hand(index).variants(char)
+    def set_line_style(self, index, line_id, sid):
+        return self._s.set_line_style(index, line_id, sid)
 
     @safe
-    def delete_glyph(self, index, char, kind, i):
-        h = self._s.hand(index)
-        h.delete_variant(char, kind, i)
-        return {"hand": h.summary(), "variants": h.variants(char)}
+    def merge_styles(self, index, src, dst):
+        return self._s.merge_styles(index, src, dst)
 
     @safe
-    def forget_letters(self, index):
-        h = self._s.hand(index)
-        h.forget_manual()
-        return h.summary()
+    def split_style(self, index, sid):
+        return self._s.split_style(index, sid)
+
+    @safe
+    def rename_style(self, index, sid, name):
+        return self._s.rename_style(index, sid, name)
+
+    @safe
+    def glyph_variants(self, index, sid, char):
+        return self._s._lib(index, sid).variants(char)
+
+    @safe
+    def delete_glyph(self, index, sid, char, kind, i):
+        lib = self._s._lib(index, sid)
+        lib.delete_variant(char, kind, i)
+        lib._font = None
+        return {**self._s.hand_info(index, lib.sid), "variants": lib.variants(char)}
+
+    @safe
+    def forget_letters(self, index, sid):
+        lib = self._s._lib(index, sid)
+        lib.forget_manual()
+        return self._s.hand_info(index, lib.sid)
 
     # calligraphies saved by name, used only when the user picks one
     @safe
@@ -405,12 +467,12 @@ class Api:
         return HW.style_list()
 
     @safe
-    def save_style(self, index, name):
-        return self._s.save_style(index, name)
+    def save_style(self, index, sid, name):
+        return self._s.save_style(index, sid, name)
 
     @safe
-    def load_style(self, index, name):
-        return self._s.load_style(index, name)
+    def load_style(self, index, sid, name):
+        return self._s.load_style(index, sid, name)
 
     @safe
     def delete_style(self, name):
@@ -426,22 +488,23 @@ class Api:
         return self._s.ink_crop(index, line_id)
 
     @safe
-    def preview_hand(self, index, text, height=None, color=None):
-        return self._s.preview_hand(index, text, height, color)
+    def preview_hand(self, index, text, height=None, color=None, sid=None, line_id=None):
+        return self._s.preview_hand(index, text, height, color, sid, line_id)
 
     @safe
     def edit_ink(self, index, line_id, text, color=None):
         return self._s.edit_ink(index, line_id, text, color)
 
     @safe
-    def add_hand(self, index, x, y, text, height=None, color=None):
-        return self._s.add_hand(index, x, y, text, height, color)
+    def add_hand(self, index, x, y, text, height=None, color=None, sid=None):
+        return self._s.add_hand(index, x, y, text, height, color, sid)
 
     @safe
-    def hand_summary(self, index=0):
+    def hand_summary(self, index=0, sid=None):
         if not self._s.doc:
-            return {"hand": HW.HandwritingLibrary().summary(), "height": 14.0, "learning": self._s.learning.stats()}
-        return self._s.hand_info(index)
+            return {"styles": [], "selected": None, "hand": HW.HandwritingLibrary().summary(), "height": 14.0,
+                    "learning": self._s.learning.stats()}
+        return self._s.hand_info(index, sid)
 
     @safe
     def reset_learning(self):
@@ -472,8 +535,16 @@ def selftest(pdf, out):
     report["blocks"] = len(blocks)
     if blocks:
         s.edit_block(0, blocks[0]["bbox"], blocks[0]["text"] + " ✓")
-    res = s.analyze(0)
+    from engine.lexicon import LEXICON
+    report["lexicon"] = LEXICON.correct("Ottinoo")
+    report["onnxruntime"] = READER.runtime_ok()
+    if report["lexicon"] != "Ottimo" or not report["onnxruntime"]:
+        raise RuntimeError(f"dizionario o onnxruntime mancanti: {report}")
+    reader = READER if READER.installed() else None
+    report["model"] = bool(reader)
+    res = s.analyze(0, reader=reader)
     report["ink"] = [l["text"] for l in res["ink"]]
+    report["sources"] = [l["source"] for l in res["ink"]]
     report["glyphs"] = len(res["hand"]["glyphs"])
     if res["ink"]:
         s.edit_ink(0, res["ink"][-1]["id"], "Calamo")

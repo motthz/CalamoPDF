@@ -20,7 +20,15 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt pyinstaller
 
+      - name: Handwriting model cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/calamo-model
+          key: trocr-small-handwritten-v1
+
       - name: Engine and updater tests
+        env:
+          CALAMO_MODEL_DIR: ${{ runner.temp }}/calamo-model
         run: python tools/test_windows.py
 
       - name: Build CalamoPDF.exe
@@ -28,6 +36,8 @@ jobs:
 
       - name: Self-test of the built exe
         shell: pwsh
+        env:
+          CALAMO_MODEL_DIR: ${{ runner.temp }}/calamo-model
         run: |
           $out = Join-Path $env:RUNNER_TEMP "selftest.json"
           Start-Process -FilePath dist\CalamoPDF.exe -ArgumentList "--selftest", "samples\esempio.pdf", "`"$out`"" -Wait
