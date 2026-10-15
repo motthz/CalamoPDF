@@ -540,21 +540,7 @@ def test_editing():
     b2 = next((b for b in s.blocks(0)["blocks"] if b["bbox"][1] > 380 and b["bbox"][1] < 420), None)
     check("save: text written afterwards is readable", b2 is not None and b2["text"] == "Scritto dopo il salvataggio",
           b2 and b2["text"])
-    # diagnosis: spaces written with a Windows system font
-    import pymupdf as _f
-    from engine import fonts as _F
-    for fam in ("Arial", "Times New Roman", "Calibri"):
-        dd = _f.open()
-        pg = dd.new_page()
-        font, _ = _F.system_font(fam, False, False)
-        tw = _f.TextWriter(pg.rect)
-        tw.append((72, 100), "a b c", font=font, fontsize=12)
-        tw.write_text(pg)
-        raw = [hex(ord(c["c"])) for bl in pg.get_text("rawdict")["blocks"] for l in bl["lines"] for sp in l["spans"] for c in sp["chars"]]
-        print("   diag", fam, font.name, font.has_glyph(32), font.glyph_advance(32), raw, flush=True)
-        data = dd.tobytes()
-        d2 = _f.open(stream=data, filetype="pdf")
-        print("   diag2", fam, repr(d2[0].get_text()), [f for f in d2[0].get_fonts(full=True)], flush=True)
+    check("save: spaces are real spaces (copy and search)", bool(s.doc[0].search_for("dopo il salvataggio")))
     # merge and split whole files
     from engine import files as FILES
     merged = os.path.join(tmp, "unito.pdf")

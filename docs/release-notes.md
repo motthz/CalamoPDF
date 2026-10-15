@@ -37,6 +37,7 @@
 
 **Correzioni**
 - Il testo scritto o modificato *dopo un salvataggio* poteva risultare illeggibile quando lo si copiava o cercava (a vista era giusto): ora resta sempre corretto.
+- Gli spazi del testo scritto da Calamo con i font di Windows (Arial, Times, Calibri…) venivano registrati come "spazi non separabili": copiando il testo o cercando più parole insieme non si trovava nulla. Ora sono spazi normali.
 - Un evidenziatore giallo molto acceso veniva scambiato per inchiostro, e riscrivendo una scritta evidenziata il giallo spariva: ora resta.
 
 ## Calamo PDF Studio 1.3.2

@@ -355,7 +355,7 @@ class EditingMixin:
     def move_block(self, index, bbox, dx, dy):
         """Drag a block of digital text: every piece is written again, with its own font,
         size and colour, dx/dy further on (displayed coordinates); the original is removed."""
-        from .document import REDACT_KW, _to_text, _write_upright
+        from .document import REDACT_KW, _append_words, _to_text, _write_upright
         with self.lock:
             page = self.doc[index]
             b, lines = self._raw_block(page, bbox)
@@ -381,7 +381,7 @@ class EditingMixin:
                 font = self._font_for(page, sp, sp["text"], {})
                 color = tuple(((sp["color"] >> k) & 255) / 255 for k in (16, 8, 0))
                 tw = fitz.TextWriter(page.rect, color=color)
-                tw.append((sp["origin"][0] + dx, sp["origin"][1] + dy), sp["text"], font=font, fontsize=sp["size"])
+                _append_words(tw, (sp["origin"][0] + dx, sp["origin"][1] + dy), sp["text"], font, sp["size"])
                 tws.append(tw)
             for tw in tws:
                 _write_upright(page, tw)
@@ -786,7 +786,7 @@ class EditingMixin:
     # ================================================================== headers, numbers, watermark
     def stamp_pages(self, spec):
         """Header / footer with variables ({n} {N} {data} {file}) and a watermark."""
-        from .document import _write_upright
+        from .document import _append_words, _write_upright
         with self.lock:
             n = len(self.doc)
             pages = parse_pages(spec.get("pages", ""), n)
@@ -816,7 +816,7 @@ class EditingMixin:
                     w = font.text_length(t, fontsize=size)
                     x = {"left": R.x0 + margin, "right": R.x1 - margin - w}.get(align, (R.x0 + R.x1 - w) / 2)
                     tw = fitz.TextWriter(page.rect, color=color)
-                    tw.append((x, y), t, font=font, fontsize=size)
+                    _append_words(tw, (x, y), t, font, size)
                     _write_upright(page, tw)
                 if wm:
                     wsize = float(spec.get("wm_size") or max(36, min(R.width, R.height) / max(len(wm), 4) * 1.4))
@@ -824,7 +824,7 @@ class EditingMixin:
                     w = font.text_length(wm, fontsize=wsize)
                     c = fitz.Point((R.x0 + R.x1) / 2, (R.y0 + R.y1) / 2)
                     tw = fitz.TextWriter(page.rect, color=wcol)
-                    tw.append((c.x - w / 2, c.y + wsize * 0.35), wm, font=font, fontsize=wsize)
+                    _append_words(tw, (c.x - w / 2, c.y + wsize * 0.35), wm, font, wsize)
                     angle = float(spec.get("wm_angle", 45))
                     rot = fitz.Matrix(1, 0, 0, 1, -c.x, -c.y) * fitz.Matrix(-angle) * fitz.Matrix(1, 0, 0, 1, c.x, c.y)
                     _write_upright(page, tw, opacity=float(spec.get("wm_opacity") or 0.18), pre=rot)

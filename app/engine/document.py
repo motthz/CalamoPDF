@@ -5,6 +5,7 @@ import copy
 import io
 import difflib
 import os
+import re
 import threading
 
 import pymupdf as fitz
@@ -66,6 +67,19 @@ def _shown(page, rect):
 def _to_text(page, rect):
     """Displayed coordinates -> the coordinates of text and redactions."""
     return fitz.Rect(rect) * page.derotation_matrix
+
+
+def _append_words(tw, pos, text, font, size):
+    """TextWriter.append without the space characters: each word is placed where it goes
+    and the gaps are left empty. Windows fonts draw the space and the no-break space with
+    the same glyph, and MuPDF records it as a no-break space: copied or searched, "dopo il"
+    would not be "dopo il". Readers put real spaces back from the gaps."""
+    x, y = pos
+    for part in re.split(r"( +)", text):
+        if part and not part.startswith(" "):
+            tw.append((x, y), part, font=font, fontsize=size)
+        x += font.text_length(part, fontsize=size)
+    return x
 
 
 def _write_upright(page, tw, opacity=-1, pre=None):
@@ -592,7 +606,7 @@ class Session(EditingMixin):
             color = _rgb(override["color"]) if override.get("color") else \
                 tuple(((s["color"] >> k) & 255) / 255 for k in (16, 8, 0))
             tw = fitz.TextWriter(page.rect, color=color)
-            tw.append((x, y), text, font=font, fontsize=size)
+            _append_words(tw, (x, y), text, font, size)
             writers.append(tw)
             x += font.text_length(text, fontsize=size)
         return x
@@ -760,7 +774,7 @@ class Session(EditingMixin):
             size = float(style.get("size") or 12)
             tw = fitz.TextWriter(page.rect, color=_rgb(style.get("color") or "#111111"))
             for k, line in enumerate(text.replace("\r", "").split("\n")):
-                tw.append((x, y + size * 0.8 + size * 1.25 * k), line, font=font, fontsize=size)
+                _append_words(tw, (x, y + size * 0.8 + size * 1.25 * k), line, font, size)
             _write_upright(page, tw)
             self._touch(index)
             return self.blocks(index)
@@ -1315,7 +1329,7 @@ class Session(EditingMixin):
                 # as wide as the picture of the text, so a search highlights the right words
                 size *= min(max(res["width_pt"] / max(font.text_length(text, fontsize=size), 1), 0.3), 3)
                 tw = fitz.TextWriter(page.rect)
-                tw.append((x, baseline), text, font=font, fontsize=size)
+                _append_words(tw, (x, baseline), text, font, size)
                 _write_hidden(page, tw)
             except Exception:
                 pass
