@@ -378,7 +378,7 @@ def test_table_form():
     cells = [c for row in rows for c in row if len(c) > 2]
     good = sum(1 for c in cells if any(_cer(t, c) < 0.25 for t in texts))
     check("table: cells read one by one", good >= len(cells) * 0.75, f"{good} di {len(cells)}")
-    glued = [t for t in texts if sum(1 for c in cells if c.lower() in t.lower()) >= 2]
+    glued = [t for t in texts if sum(1 for c in set(cells) if c.lower() in t.lower()) >= 2]
     check("table: no cells glued together", not glued, str(glued))
 
 
