@@ -207,12 +207,12 @@ input, select, textarea { font: inherit; color: var(--text); }
 .page .overlay { position: absolute; inset: 0; }
 .page-num { position: absolute; left: 50%; bottom: -22px; transform: translateX(-50%); font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; }
 .tool-text .page .overlay, .tool-hand .page .overlay { cursor: text; }
-.tool-erase .page .overlay { cursor: crosshair; }
+.tool-erase .page .overlay, .tool-mark .page .overlay { cursor: crosshair; }
 .tool-view .page .overlay .blk, .tool-view .page .overlay .ink { pointer-events: none; }
 
 .blk { position: absolute; border-radius: 3px; cursor: text; transition: background .12s, box-shadow .12s; }
 .tool-edit .blk:hover { background: rgba(226, 182, 97, .10); box-shadow: 0 0 0 1.5px rgba(226, 182, 97, .75); }
-.tool-text .blk, .tool-hand .blk, .tool-erase .blk { pointer-events: none; }
+.tool-text .blk, .tool-hand .blk, .tool-erase .blk, .tool-mark .blk, .tool-mark .ink { pointer-events: none; }
 
 .ink { position: absolute; border-radius: 4px; cursor: pointer; box-shadow: 0 0 0 1.5px rgba(122, 167, 255, .0); transition: all .15s; }
 .show-ink .ink { box-shadow: 0 0 0 1.2px rgba(122, 167, 255, .55); background: rgba(122, 167, 255, .06); }

@@ -15,7 +15,7 @@ from . import handwriting as HW
 from . import writers as WR
 from .handwriting import HandwritingLibrary, PageWritings
 from .lexicon import LEXICON, WORD_RE
-from .ocr import PRINT_BELOW, Learning, prepare_page, read_page
+from .ocr import PRINT_BELOW, Learning, prepare_page, read_page, read_region
 
 REDACT_KW = dict(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=fitz.PDF_REDACT_LINE_ART_NONE)
 try:
@@ -121,6 +121,14 @@ def _stack(pngs):
     return buf.getvalue()
 
 
+def _overlap(a, b):
+    """Share of box a covered by box b."""
+    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    area = max((a[2] - a[0]) * (a[3] - a[1]), 1e-6)
+    return ix * iy / area
+
+
 def _norm(t):
     return "".join(c for c in t.lower() if c.isalnum() or c == " ").strip()
 
@@ -171,6 +179,7 @@ class Session:
         self.undo_stack, self.redo_stack = [], []
         self.ink = {}            # page index -> [ink line]
         self.hands = {}          # page index -> PageWritings: the people / typefaces of each page
+        self.ignored = {}        # page index -> [rect]: "this is not writing", said by the user
         self.learning = Learning()
         self.resolver = None
         self.version = 0         # bumps on every change, per page versions below
@@ -188,6 +197,7 @@ class Session:
             self.dirty = False
             self.undo_stack, self.redo_stack = [], []
             self.ink, self.page_versions, self.hands = {}, {}, {}
+            self.ignored = {}
             self.resolver = F.FontResolver(doc)
             self.version += 1
             return self.info()
@@ -200,6 +210,7 @@ class Session:
             self.dirty = True
             self.undo_stack, self.redo_stack = [], []
             self.ink, self.page_versions, self.hands = {}, {}, {}
+            self.ignored = {}
             self.resolver = F.FontResolver(doc)
             self.version += 1
             return self.info()
@@ -231,7 +242,7 @@ class Session:
             one = fitz.open()
             one.insert_pdf(self.doc, from_page=page, to_page=page, links=False, annots=True)
             return ("page", page, one.tobytes(garbage=1, deflate=True), copy.deepcopy(self.ink.get(page)),
-                    self.hands.get(page), self.page_versions.get(page, 0))
+                    self.hands.get(page), self.page_versions.get(page, 0), list(self.ignored.get(page, [])))
         return ("doc", self.doc.tobytes(), copy.deepcopy(self.ink), dict(self.page_versions), dict(self.hands))
 
     def _page_only_ok(self, page):
@@ -259,7 +270,8 @@ class Session:
             return self.info()
         snap = src.pop()
         if snap[0] == "page":
-            _, i, data, ink, hands, ver = snap
+            _, i, data, ink, hands, ver, ignored = snap
+            self.ignored[i] = ignored
             dst.append(self._snapshot(i))
             one = fitz.open(stream=data, filetype="pdf")
             self.doc.delete_page(i)
@@ -270,6 +282,11 @@ class Session:
                 else:
                     store[i] = value
             self.page_versions[i] = max(ver, self.page_versions.get(i, 0)) + 1
+            if self.ink.get(i):
+                try:
+                    self._relearn(i)
+                except Exception:
+                    pass
         else:
             dst.append(self._snapshot())
             _, data, ink, versions, self.hands = snap
@@ -766,6 +783,10 @@ class Session:
                 raise RuntimeError("Il documento è cambiato durante la lettura.")
             if self.page_versions.get(index, 0) != version:
                 raise RuntimeError(f"La pagina {index + 1} è stata modificata durante la lettura: leggila di nuovo.")
+            # what the user said is not writing stays out; what they outlined by hand stays in
+            lines = [l for l in lines if not self._is_ignored(index, l["bbox"])]
+            kept = [l for l in self.ink.get(index, []) if l.get("marked") and l.get("feat")]
+            lines = [l for l in lines if not any(_overlap(l["bbox"], k["bbox"]) > 0.5 for k in kept)] + kept
             old = self.hands.get(index)
             pw = self.hands[index] = PageWritings()
             # lines written the same way (same pen, stroke, slant, size) belong to one writing
@@ -784,6 +805,85 @@ class Session:
             self._relearn(index)
             return self._result(index, read=sum(1 for l in lines if l["source"] != "unread"),
                                 model=sum(1 for l in lines if l["source"] == "model"))
+
+    def _is_ignored(self, index, bbox):
+        return any(_overlap(bbox, r) > 0.6 for r in self.ignored.get(index, []))
+
+    def remove_ink(self, index, line_id):
+        """'This is not writing': the line goes, and a new reading will not bring it back."""
+        with self.lock:
+            lines = self.ink.get(index, [])
+            line = lines[line_id]
+            if line.get("synthetic"):
+                raise RuntimeError("Questa riga è stata scritta con Calamo: per toglierla usa la gomma.")
+            self._checkpoint(index)
+            del lines[line_id]
+            self.ignored.setdefault(index, []).append(list(line["bbox"]))
+            self._lines_removed(index, [line_id])
+            self._relearn(index)
+            self.writings(index).drop_empty({l.get("style") for l in lines})
+            return self._result(index)
+
+    def _lines_removed(self, index, removed):
+        """Letters marked on the lines that follow keep pointing to their own line."""
+        removed = sorted(removed)
+        for lib in self.writings(index).libs.values():
+            for ch in list(lib.manual):
+                gs = []
+                for g in lib.manual[ch]:
+                    if g.src and g.src[0] == "manual":
+                        if g.src[1] in removed:
+                            continue
+                        g.src = ("manual", g.src[1] - sum(1 for r in removed if r < g.src[1]))
+                    gs.append(g)
+                if gs:
+                    lib.manual[ch] = gs
+                else:
+                    del lib.manual[ch]
+            lib._font = None
+
+    def mark_ink(self, index, rect, lang=None, reader=None):
+        """Writing the reading missed, outlined by the user: read it and add it to the page,
+        in the writing of the person whose hand it looks like."""
+        with self.lock:
+            doc = self.doc
+            job = prepare_page(doc[index], True)
+            prefer = self._doc_words(index)
+            hs = [l["bbox"][3] - l["bbox"][1] for l in self.ink.get(index, []) if not l.get("synthetic")]
+            line_h = float(np.median(hs)) if hs else None
+        new = read_region(job, [rect], self.learning, lang, reader, LEXICON, prefer, line_h)
+        with self.lock:
+            if self.doc is not doc:
+                raise RuntimeError("Il documento è cambiato durante la lettura.")
+            self._checkpoint(index)
+            lines = self.ink.setdefault(index, [])
+            r = fitz.Rect(rect)
+            # lines of the automatic reading inside the outline are replaced by it
+            drop = [j for j, l in enumerate(lines) if not l.get("synthetic")
+                    and r.contains(fitz.Point((l["bbox"][0] + l["bbox"][2]) / 2, (l["bbox"][1] + l["bbox"][3]) / 2))]
+            if drop:
+                for j in reversed(drop):
+                    del lines[j]
+                self._lines_removed(index, drop)
+            self.ignored[index] = [g for g in self.ignored.get(index, []) if _overlap(g, list(rect)) < 0.3]
+            pw = self.writings(index)
+            cents = [(lib.feat, lib.kind) for lib in pw.libs.values() if lib.feat is not None]
+            sids = [sid for sid, lib in pw.libs.items() if lib.feat is not None]
+            added = []
+            for l in new:
+                i, d = WR.closest(l["feat"], cents) if cents else (None, None)
+                if i is not None and d is not None and d < 1.3:
+                    sid = sids[i]
+                else:
+                    sid = pw.new(l["kind"], l["feat"])
+                    cents.append((l["feat"], l["kind"]))
+                    sids.append(sid)
+                l["style"], l["kind"] = sid, pw.get(sid).kind
+                lines.append(l)
+                added.append(len(lines) - 1)
+            self._relearn(index)
+            pw.drop_empty({l.get("style") for l in lines})
+            return self._result(index, added=added)
 
     @staticmethod
     def _carry_over(old, pw):
@@ -1274,6 +1374,7 @@ class Session:
             p = self.doc[index]
             p.set_rotation((p.rotation + delta) % 360)
             self.ink.pop(index, None)
+            self.ignored.pop(index, None)
             self._touch(index)
             return self.info()
 
@@ -1285,6 +1386,7 @@ class Session:
             self.doc.delete_page(index)
             self.ink = {(k if k < index else k - 1): v for k, v in self.ink.items() if k != index}
             self.hands = {(k if k < index else k - 1): v for k, v in self.hands.items() if k != index}
+            self.ignored = {(k if k < index else k - 1): v for k, v in self.ignored.items() if k != index}
             self.page_versions = {i: self.page_versions.get(i, 0) + 1 for i in range(len(self.doc))}
             self._touch()
             return self.info()
@@ -1296,6 +1398,7 @@ class Session:
             self.doc.new_page(pno=index + 1, width=ref.width, height=ref.height)
             self.ink = {(k if k <= index else k + 1): v for k, v in self.ink.items()}
             self.hands = {(k if k <= index else k + 1): v for k, v in self.hands.items()}
+            self.ignored = {(k if k <= index else k + 1): v for k, v in self.ignored.items()}
             self.page_versions = {i: self.page_versions.get(i, 0) + 1 for i in range(len(self.doc))}
             self._touch()
             return self.info()

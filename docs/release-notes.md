@@ -1,4 +1,17 @@
-## Novità di Calamo PDF Studio 1.3.0
+## Novità di Calamo PDF Studio 1.3.1
+
+**Correggere cosa Calamo considera scrittura.**
+- **"Non è una scritta"**: nel riquadro di una riga c'è il cestino. La riga sparisce e non viene più proposta, anche rileggendo la pagina (Ctrl+Z per ripristinarla).
+- **Segna scritta** (tasto R): trascina un riquadro intorno a una scritta che Calamo non ha riconosciuto. Viene letta e aggiunta alla scrittura della persona che l'ha scritta; se non si riesce a leggerla, scrivi tu cosa c'è. Le scritte segnate restano anche rileggendo la pagina.
+
+**Moduli e tabelle scritti a mano.**
+- I bordi delle tabelle vengono riconosciuti anche se disegnati a mano o storti nella foto, e non vengono più letti come lettere ("I", ")").
+- Ogni cella viene letta da sola: niente più testi di celle vicine uniti, né righe diverse della stessa cella mescolate.
+- Il lettore della scrittura a mano riceve righe ripulite (sfondo della carta appiattito, senza pezzi delle righe sopra e sotto) e legge anche l'inchiostro che l'OCR di Windows non ha letto.
+- Trattini e pezzi di bordo isolati non vengono più proposti come scritte.
+- Il lettore si scarica anche da un mirror alternativo quando HuggingFace non è raggiungibile.
+
+## Calamo PDF Studio 1.3.0
 
 **Un lettore dedicato alla scrittura a mano.**
 - Nelle Impostazioni puoi scaricare (una sola volta, circa 60 MB) un modello che legge le righe scritte a mano molto meglio dell'OCR di Windows; poi funziona offline. Nei test sbaglia il 3% dei caratteri contro il 44% dell'OCR di Windows.
@@ -33,7 +46,7 @@
 - Le scorciatoie da tastiera tornano a funzionare dopo aver chiuso un riquadro con Esc.
 
 ### Download
-- **CalamoPDF-Setup-1.3.0.exe** — installer per Windows.
+- **CalamoPDF-Setup-1.3.1.exe** — installer per Windows.
 - **CalamoPDF.exe** — versione portabile.
 
-Chi ha già la 1.1 o la 1.2 riceve questa versione in automatico.
+Chi ha già una versione precedente riceve questa in automatico.

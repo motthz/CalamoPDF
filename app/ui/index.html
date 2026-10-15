@@ -96,6 +96,7 @@
       <button data-tool="text" data-tip="Aggiungi testo  (T)"><svg><use href="#i-text"/></svg><span>Testo</span></button>
       <button data-tool="hand" data-tip="Scrivi con la calligrafia appresa  (H)"><svg><use href="#i-pen"/></svg><span>A mano</span></button>
       <button data-tool="erase" data-tip="Cancella un'area  (E)"><svg><use href="#i-eraser"/></svg><span>Gomma</span></button>
+      <button data-tool="mark" data-tip="Segna una scritta che Calamo non ha riconosciuto: trascina un riquadro intorno  (R)"><svg><use href="#i-plus"/></svg><span>Segna scritta</span></button>
     </div>
 
     <div class="tb-group right">
@@ -245,6 +246,7 @@
         <div class="card shortcuts">
           <div><kbd>M</kbd> Modifica testo</div><div><kbd>T</kbd> Nuovo testo</div>
           <div><kbd>H</kbd> Scrivi a mano</div><div><kbd>E</kbd> Gomma</div>
+          <div><kbd>R</kbd> Segna una scritta</div><div></div>
           <div><kbd>Ctrl</kbd>+<kbd>Invio</kbd> Applica</div><div><kbd>Esc</kbd> Annulla</div>
           <div><kbd>Ctrl</kbd>+<kbd>F</kbd> Trova</div><div><kbd>Ctrl</kbd>+<kbd>Z</kbd> Annulla</div>
         </div>
@@ -322,7 +324,7 @@
 
 <!-- Handwriting popover -->
 <div class="popover" id="inkPop" hidden>
-  <div class="pop-head"><svg><use href="#i-pen"/></svg><b id="inkPopTitle">Testo scritto a mano</b><button class="icon-btn" data-cmd="inkClose"><svg><use href="#i-x"/></svg></button></div>
+  <div class="pop-head"><svg><use href="#i-pen"/></svg><b id="inkPopTitle">Testo scritto a mano</b><button class="icon-btn danger" id="inkRemove" title="Non è una scritta: togli questa riga (non verrà più proposta)"><svg><use href="#i-trash"/></svg></button><button class="icon-btn" data-cmd="inkClose"><svg><use href="#i-x"/></svg></button></div>
   <img class="ink-crop" id="inkCrop" alt="">
   <div class="pop-section" id="readSection">
     <label class="pop-label">Calamo ha letto <span class="src-badge" id="inkSrc"></span></label>

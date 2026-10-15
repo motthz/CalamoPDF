@@ -4,7 +4,8 @@
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const PT = 4 / 3;            // css px per PDF point at 100%
-const TOOL_NAMES = { view: "Naviga", edit: "Modifica", text: "Nuovo testo", hand: "Scrittura a mano", erase: "Gomma" };
+const TOOL_NAMES = { view: "Naviga", edit: "Modifica", text: "Nuovo testo", hand: "Scrittura a mano", erase: "Gomma",
+                     mark: "Segna una scritta: trascina un riquadro intorno" };
 
 const isDoubt = l => l.source === "ocr" && l.doubt > 0.4 && l.kind !== "print";
 // writings (people / typefaces) of each page, as the engine groups them
@@ -421,6 +422,7 @@ function bindOverlay(P) {
   ov.addEventListener("mousedown", e => {
     if (e.button !== 0 || e.target.closest(".editor")) return;
     if (S.tool === "erase") return startErase(P, e);
+    if (S.tool === "mark") return startRect(P, e, rect => markInk(P, rect));
   });
   ov.addEventListener("click", e => {
     if (e.target.closest(".editor")) return;
@@ -445,6 +447,25 @@ function bindOverlay(P) {
 
 // ---------------------------------------------------------------- erase tool
 function startErase(P, e) {
+  startRect(P, e, async rect => {
+    await guarded(async () => { await call("erase_area", P.i, rect); await afterChange(); toast("Area cancellata", "ok"); });
+  });
+}
+// writing the reading missed: the user outlines it, Calamo reads it
+async function markInk(P, rect) {
+  await guarded(async () => {
+    const r = await call("mark_ink", P.i, rect);
+    applyInkResult(P.i, r);
+    S.doc = await call("info");
+    const id = (r.added || [])[0];
+    const line = r.ink.find(l => l.id === id);
+    toast(line && line.text ? `Letto: “${line.text}”. Se non è giusto, correggilo qui.` : "Scritta aggiunta: scrivi cosa c'è.", "ok");
+    setTool("edit");
+    const el = line && $(`.ink[data-id="${line.id}"]`, P.overlay);
+    if (line) openInk(P, line, el || P.overlay);
+  }, "Lettura della scritta…");
+}
+function startRect(P, e, done) {
   e.preventDefault();
   const a = pagePoint(P, e), s = scale();
   const r = document.createElement("div");
@@ -461,7 +482,7 @@ function startErase(P, e) {
     r.remove();
     const rect = [Math.min(a.x, b.x), Math.min(a.y, b.y), Math.max(a.x, b.x), Math.max(a.y, b.y)];
     if (rect[2] - rect[0] < 3 || rect[3] - rect[1] < 3) return;
-    await guarded(async () => { await call("erase_area", P.i, rect); await afterChange(); toast("Area cancellata", "ok"); });
+    await done(rect);
   };
   window.addEventListener("mousemove", move);
   window.addEventListener("mouseup", up);
@@ -678,6 +699,7 @@ async function openInk(P, line, anchor) {
   $("#inkPopTitle").textContent = line.source === "unread" ? "Scritta non letta: scrivi cosa c'è" :
     `${line.synthetic ? "Riscritto" : line.kind === "print" ? "Stampato" : "A mano"}${st ? " · " + st.name : ""}`;
   $("#readSection").hidden = !!line.synthetic;
+  $("#inkRemove").hidden = !!line.synthetic;
   $("#newStyleRow").hidden = true;
   fillStyleSelect($("#inkStyle"), P.i, null, line.style, true);
   setKindSwitch(line);
@@ -701,6 +723,7 @@ function openHandNew(P, pt, e) {
   anchor.style.cssText = `position:absolute;left:${pt.x * scale()}px;top:${pt.y * scale()}px;width:2px;height:${S.handHeight * scale()}px;background:var(--gold);box-shadow:0 0 8px var(--gold)`;
   P.overlay.appendChild(anchor);
   S.pop = { P, pt, anchor, kind: "new", temp: anchor };
+  $("#inkRemove").hidden = true;
   $("#inkPopTitle").textContent = "Scrivi a mano";
   $("#readSection").hidden = true;
   $("#newStyleRow").hidden = !pageStyles(P.i).length;
@@ -805,6 +828,17 @@ async function teach(page, id, text) {
   toast((r.learned ? "Grazie! Ho imparato la correzione e la userò d'ora in poi." : "Lettura aggiornata.") +
         (n ? ` L'ho applicata anche ${n === 1 ? "a un'altra riga" : `ad altre ${n} righe`} della stessa scrittura.` : ""), "ok");
 }
+$("#inkRemove").onclick = async () => {
+  const p = S.pop;
+  if (!p || !p.line) return;
+  closePop();
+  await guarded(async () => {
+    applyInkResult(p.P.i, await call("remove_ink", p.P.i, p.line.id));
+    S.doc = await call("info");
+    updateInfo(S.doc);
+    toast("Riga tolta: non verrà più proposta. Ctrl+Z per ripristinarla.", "ok");
+  });
+};
 $("#inkApply").onclick = async () => {
   const p = S.pop;
   if (!p) return;
@@ -1486,7 +1520,7 @@ document.addEventListener("keydown", e => {
   }
   if (e.key === "Escape" && !$("#glyphModal").hidden) { $("#glyphModal").hidden = true; return; }
   if (typing || !S.doc) return;
-  const tools = { n: "view", m: "edit", t: "text", h: "hand", e: "erase" };
+  const tools = { n: "view", m: "edit", t: "text", h: "hand", e: "erase", r: "mark" };
   if (tools[k]) setTool(tools[k]);
   if (e.key === "Escape") { closePop(); $("#exportMenu").hidden = true; }
   if (e.key === "PageDown") goToPage(Math.min(S.current + 1, S.pages.length - 1));

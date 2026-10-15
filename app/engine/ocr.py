@@ -14,6 +14,7 @@ import numpy as np
 import pymupdf as fitz
 
 from .storage import load_json, save_json
+from . import writers as WR
 from .writers import line_features, unread_lines
 
 OCR_DPI = 300
@@ -333,9 +334,13 @@ def read_page(job, learning, lang_tag=None, reader=None, lexicon=None, prefer=No
         result.append({"bbox": [x0, y0, x1, y1], "raw": raw, "text": raw, "words": words,
                        "source": "ocr", "doubt": _doubt(raw), "synthetic": False})
     # ink nobody could read: show it, so the user can type what it says
+    half = rgb[::2, ::2]
+    try:
+        border = WR.rules(WR.ink_mask(half), max(int(10 * zoom / 2), 4), chain=3, chain_h=6)
+    except Exception:
+        border = None
     try:
         known = [w["bbox"] for l in result for w in l["words"]] + [list(n) for n in native]
-        half = rgb[::2, ::2]
         for b in unread_lines(half, zoom / 2, known):
             result.append({"bbox": b, "raw": "", "text": "", "words": [], "source": "unread",
                            "doubt": 1.0, "synthetic": False})
@@ -345,11 +350,12 @@ def read_page(job, learning, lang_tag=None, reader=None, lexicon=None, prefer=No
         _measure(l, rgb, zoom)
     if reader is not None:
         # the reader reads whole lines: give it the pieces the OCR split back together
-        result = _join_pieces(result, rgb, zoom)
+        result = _join_pieces(result, rgb, zoom, border)
     for l in result:
         if cancelled and cancelled():
             raise RuntimeError("Lettura annullata.")
-        if l["kind"] == "hand":
+        # handwriting, and any ink nobody read (the OCR may miss print on a poor photo)
+        if l["kind"] == "hand" or (l["source"] == "unread" and reader is not None):
             _second_opinion(l, _crop(rgb, l["bbox"], zoom), zoom, reader, lexicon, prefer)
         text, learned = learning.apply(l["raw"])
         l["text"] = text
@@ -357,6 +363,55 @@ def read_page(job, learning, lang_tag=None, reader=None, lexicon=None, prefer=No
             l["source"] = "learned"
     result.sort(key=lambda l: (round(l["bbox"][1] / 6), l["bbox"][0]))
     return result
+
+
+def read_region(job, rects, learning, lang_tag=None, reader=None, lexicon=None, prefer=None, line_h=None):
+    """Read the writing inside areas the user outlined (ink the automatic reading missed).
+    Each area may hold several lines; an area with no visible ink still becomes a line,
+    so the user can type what it says."""
+    rgb, zoom = job["rgb"], job["zoom"]
+    H, W = rgb.shape[:2]
+    out = []
+    for rect in rects:
+        x0, y0 = int(max(rect[0] * zoom, 0)), int(max(rect[1] * zoom, 0))
+        x1, y1 = int(min(rect[2] * zoom, W)), int(min(rect[3] * zoom, H))
+        boxes = []
+        if x1 - x0 > 4 and y1 - y0 > 4:
+            mask = WR.ink_mask(rgb[y0:y1, x0:x1])
+            mask &= ~WR.rules(mask, max(int(10 * zoom), 4), chain=3, chain_h=6)
+            ys, xs = np.nonzero(mask)
+            if len(xs) > 10:
+                tight = (int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1)
+                lh = (line_h or 14.0) * zoom
+                for bx0, by0, bx1, by1 in WR.split_rows(mask, tight, lh):
+                    boxes.append([(x0 + bx0) / zoom, (y0 + by0) / zoom, (x0 + bx1) / zoom, (y0 + by1) / zoom])
+        if not boxes:
+            boxes = [list(rect)]
+        for b in boxes:
+            l = {"bbox": b, "raw": "", "text": "", "words": [], "source": "unread", "doubt": 1.0,
+                 "synthetic": False, "marked": True}
+            crop = _crop(rgb, b, zoom)
+            try:                                       # Windows OCR on the area alone
+                words = [w for line in windows_ocr(_png(crop), lang_tag) for w in line
+                         if (w["box"][0] + w["box"][2]) / 2 <= crop.shape[1] and (w["box"][1] + w["box"][3]) / 2 <= crop.shape[0]]
+            except Exception:
+                words = []
+            if words:
+                ox, oy = b[0] - 2 / zoom, max(b[1] - (b[3] - b[1]) * 0.12, 0)
+                l["words"] = [{"text": fix_letters(fix_numbers(w["text"])),
+                               "bbox": [ox + w["box"][0] / zoom, oy + w["box"][1] / zoom,
+                                        ox + w["box"][2] / zoom, oy + w["box"][3] / zoom]} for w in words]
+                l["raw"] = " ".join(w["text"] for w in l["words"])
+                l["source"], l["doubt"] = "ocr", _doubt(l["raw"])
+            _measure(l, rgb, zoom)
+            if crop.size and (l["kind"] == "hand" or l["source"] == "unread"):
+                _second_opinion(l, crop, zoom, reader, lexicon, prefer)
+            text, learned = learning.apply(l["raw"])
+            l["text"] = text
+            if learned:
+                l["source"] = "learned"
+            out.append(l)
+    return out
 
 
 def _measure(l, rgb, zoom):
@@ -367,7 +422,28 @@ def _measure(l, rgb, zoom):
     l["feat"] = line_features(crop, l["bbox"][3] - l["bbox"][1], score)
 
 
-def _join_pieces(lines, rgb, zoom):
+def _border_between(rgb, zoom, a, b, border=None):
+    """A table border (a dark line from above the row to below it) between two pieces."""
+    y0, y1 = min(a[1], b[1]), max(a[3], b[3])
+    if border is not None:                    # the borders found on the page (half size)
+        z = zoom / 2
+        ya, yb = int(y0 * z), int(y1 * z) + 1
+        xa, xb = int(a[2] * z) - 1, int(b[0] * z) + 2
+        if xb > xa and border[max(ya, 0):yb, max(xa, 0):xb].any(axis=1).mean() >= 0.3:
+            return True
+    h = y1 - y0
+    ya, yb = int(max((y0 - h * 0.3) * zoom, 0)), int(min((y1 + h * 0.3) * zoom, rgb.shape[0]))
+    xa, xb = int(a[2] * zoom), int(b[0] * zoom) + 1
+    if xb <= xa:
+        return False
+    g = _gray(rgb[ya:yb, xa:xb])
+    if not g.size:
+        return False
+    dark = g < min(int(np.percentile(_gray(rgb[ya:yb]), 90)) - 60, 160)
+    return bool((dark.mean(axis=0) > 0.75).any())
+
+
+def _join_pieces(lines, rgb, zoom, border=None):
     """Handwriting the OCR cut into pieces of one row ("Visto e" | "approvato", or a piece
     it could not read at all) becomes one line again, if the pieces are close and written
     with the same pen."""
@@ -379,13 +455,12 @@ def _join_pieces(lines, rgb, zoom):
             # only handwriting, or ink nobody read, next to handwriting
             if not all(x["kind"] == "hand" or x["source"] == "unread" for x in (l, m)):
                 continue
-            if l["source"] == m["source"] == "unread":
-                continue
             a, b = m["bbox"], l["bbox"]
             inter = min(a[3], b[3]) - max(a[1], b[1])
             h = max(a[3] - a[1], b[3] - b[1])
             if (inter >= 0.5 * min(a[3] - a[1], b[3] - b[1]) and 0 <= b[0] - a[2] < 2.5 * h
-                    and _colour_dist(m["feat"]["ink"], l["feat"]["ink"]) < 40):
+                    and _colour_dist(m["feat"]["ink"], l["feat"]["ink"]) < 40
+                    and not _border_between(rgb, zoom, a, b, border)):
                 m["bbox"] = [a[0], min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3])]
                 m["words"] = m["words"] + l["words"]
                 m["raw"] = (m["raw"] + " " + l["raw"]).strip()
@@ -413,8 +488,11 @@ def _second_opinion(line, crop, zoom, reader, lexicon, prefer):
             text, conf = reader.read(crop)
             # as many letters as the ink is long: a reading of another length is the model
             # making things up (it does that on smudges, ruled lines, drawings)
-            aspect = crop.shape[1] / max(crop.shape[0], 1)
-            if text and 0.6 <= len(text) / max(aspect, 0.5) <= 4.0:
+            clean = reader.clean(crop) if hasattr(reader, "clean") else crop
+            aspect = clean.shape[1] / max(clean.shape[0], 1)
+            def plausible(t):
+                return t and 0.5 <= len(t) / max(aspect, 0.5) <= 7.0 and "000 000" not in t
+            if plausible(text):
                 options.append((text, "model", conf))
         except Exception:
             pass
