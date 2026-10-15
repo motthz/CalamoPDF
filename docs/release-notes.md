@@ -1,4 +1,12 @@
-## Novità di Calamo PDF Studio 1.3.1
+## Novità di Calamo PDF Studio 1.3.2
+
+**Si modificano solo le lettere, lo sfondo resta com'era.**
+- Quando riscrivi una scritta, Calamo riconosce pixel per pixel quali sono le lettere e quali lo sfondo: carta, evidenziatore, bordi delle tabelle, righe del quaderno, sottolineature.
+- Viene ricostruito solo il posto delle lettere: l'**evidenziatore continua** (anche dove finisce a metà parola), le **tabelle non si deformano** e le righe che attraversavano le lettere proseguono.
+- Il nuovo testo resta **dentro la sua cella**: se è più lungo va a capo nella cella o viene stretto, senza superare il bordo.
+- Le lettere imparate dalla pagina e la misura della riga non includono più pezzi di bordi o di sottolineature.
+
+## Calamo PDF Studio 1.3.1
 
 **Correggere cosa Calamo considera scrittura.**
 - **"Non è una scritta"**: nel riquadro di una riga c'è il cestino. La riga sparisce e non viene più proposta, anche rileggendo la pagina (Ctrl+Z per ripristinarla).
@@ -46,7 +54,7 @@
 - Le scorciatoie da tastiera tornano a funzionare dopo aver chiuso un riquadro con Esc.
 
 ### Download
-- **CalamoPDF-Setup-1.3.1.exe** — installer per Windows.
+- **CalamoPDF-Setup-1.3.2.exe** — installer per Windows.
 - **CalamoPDF.exe** — versione portabile.
 
 Chi ha già una versione precedente riceve questa in automatico.
