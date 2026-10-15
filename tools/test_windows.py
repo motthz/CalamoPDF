@@ -87,10 +87,13 @@ def test_rotated_page_edit():
             a = np.frombuffer(pix.samples, np.uint8).reshape(pix.h, pix.w, pix.n)[:, :, :3].mean(axis=2)
             return float((a < 140).mean())
         start = fitz.Rect(line.x0, line.y0 - 4, line.x0 + line.width * 0.4, line.y1 + 4)
-        tail = fitz.Rect(line.x0 + line.width * 0.6, line.y0, line.x1, line.y1)
+        # where the old writing was and the new, shorter one does not reach
+        new_end = s.ink[0][0]["bbox"][2] + 2
+        tail = fitz.Rect(max(line.x0 + line.width * 0.6, new_end), line.y0, line.x1, line.y1)
         elsewhere = fitz.Rect(page.rect.x0, line.y1 + line.height * 2, page.rect.x1, page.rect.y1)
         check(f"rotation {rot}: new writing on the old line", ink_share(start) > 0.02, f"{ink_share(start):.3f}")
-        check(f"rotation {rot}: old writing covered", ink_share(tail) < 0.01, f"{ink_share(tail):.3f}")
+        left = ink_share(tail) if tail.width > 3 else 0.0      # the new text may cover it all
+        check(f"rotation {rot}: old writing covered", left < 0.01, f"{left:.3f}")
         check(f"rotation {rot}: nothing written elsewhere", ink_share(elsewhere) < 0.001, f"{ink_share(elsewhere):.4f}")
 
 
