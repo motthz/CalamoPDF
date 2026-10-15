@@ -149,24 +149,50 @@ def _box(a, k):
 def erase_letters(rgb, region, letter_h, seed=0):
     """Rebuild the background under the letters inside `region` (x0, y0, x1, y1 in px of
     rgb, which should include some surroundings). Returns (rgb image of the region: the
-    original everywhere but on the letters, n rebuilt pixels) or (None, 0) without letters.
+    original everywhere but on the letters, n rebuilt pixels, the region really used - it
+    grows to hold whole letters) or (None, 0, region) without letters.
     The image is opaque on purpose: a transparency mask leaves a dark seam around its
     edges when the page is drawn."""
     letters, vert, horiz, ink = analyse(rgb, letter_h)
     x0, y0, x1, y1 = region
+    H, W = letters.shape
+    # whole letters: the strokes touching the area, also where they stick out of it (an OCR
+    # box often cuts ascenders and tails), but never the letters of the lines around
+    start = np.zeros_like(letters)
+    start[y0:y1, x0:x1] = letters[y0:y1, x0:x1]
+    if not start.any():
+        return None, 0, region
+    # never further than a little above and below the area (the next line is not ours)
+    reach = np.zeros_like(letters)
+    m = int((y1 - y0) * 1.2) + 2
+    reach[max(y0 - m, 0):y1 + m, max(x0 - m, 0):x1 + m] = True
+    grown = start
+    for _ in range(int(letter_h * 1.5)):
+        nxt = _dilate(grown, 1) & letters & reach
+        if (nxt == grown).all():
+            break
+        grown = nxt
+    ys, xs = np.nonzero(grown)
+    ext = ys.max() - ys.min() + 1
+    if ext > letter_h * 1.6 and ext < (y1 - y0) * 4:      # the box was much smaller than the letters
+        box = (int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1)
+        return erase_letters(rgb, box, ext / 1.15, seed)
+    pad = max(int(letter_h * 0.15), 3)
+    x0, y0 = max(min(x0, int(xs.min()) - pad), 0), max(min(y0, int(ys.min()) - pad), 0)
+    x1, y1 = min(max(x1, int(xs.max()) + 1 + pad), W), min(max(y1, int(ys.max()) + 1 + pad), H)
     inside = np.zeros_like(letters)
     inside[y0:y1, x0:x1] = True
     # the soft edges of the strokes (anti-aliasing, scanner blur, ink bleeding) go too
     gray = _gray(rgb)
     bg = paper(gray, max(letter_h * 0.8, 6))
     touched = gray < bg * 0.96
-    core = letters & inside
+    core = grown
     hole = (_dilate(core, 5) & touched) | _dilate(core, 3)
     hole &= inside
     lines = vert | horiz
     hole &= ~(lines & ~_dilate(letters, 1))           # a line's own pixels stay as they are
     if not hole.any():
-        return None, 0
+        return None, 0, region
     rebuilt = hole.copy()
     out = rgb[:, :, :3].astype(np.float32).copy()
     gap = int(letter_h * 2)
@@ -195,7 +221,7 @@ def erase_letters(rgb, region, letter_h, seed=0):
     if len(resid) and hole.any():
         out[hole] += resid[rng.integers(0, len(resid), size=int(hole.sum()))] * 0.8
     patch = np.clip(out[y0:y1, x0:x1], 0, 255).astype(np.uint8)
-    return patch, int(rebuilt[y0:y1, x0:x1].sum())
+    return patch, int(rebuilt[y0:y1, x0:x1].sum()), (x0, y0, x1, y1)
 
 
 def cell_right(rgb, row, x_from, letter_h):

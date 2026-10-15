@@ -350,7 +350,7 @@ class Session:
         if x1 - x0 < 2 or y1 - y0 < 2:
             return False
         from .letters import erase_letters
-        patch, n = erase_letters(rgb, (x0, y0, x1, y1), (rect.height / 1.28) * zoom)
+        patch, n, (x0, y0, x1, y1) = erase_letters(rgb, (x0, y0, x1, y1), (rect.height / 1.28) * zoom)
         if patch is None:
             return False
         from PIL import Image

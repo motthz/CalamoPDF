@@ -419,12 +419,19 @@ def test_rewrite_keeps_background():
     s = Session()
     s.open(path)
     r = s.analyze(0)
-    lines = {l["text"]: l for l in r["ink"]}
-    print("   righe:", list(lines))
-    first = next((l for l in r["ink"] if "venerdi" in l["text"].lower() or "consegna" in l["text"].lower()), None)
-    second = next((l for l in r["ink"] if "rossi" in l["text"].lower() or "firmato" in l["text"].lower()), None)
+    print("   righe:", [l["text"] for l in r["ink"]])
+
+    def find(words, area):
+        l = next((l for l in s._ink_public(0) if any(w in l["text"].lower() for w in words)), None)
+        if l is None:      # the OCR missed it among the lines of the table: outline it by hand
+            res = s.mark_ink(0, [v * k for v in area])
+            l = next((x for x in res["ink"] if x["id"] in res.get("added", [])), None)
+            print("   segnata a mano:", l and l["text"])
+        return l
+    first = find(("venerdi", "consegna", "entro"), (xs[0] + 20, y0 + 25, xs[1] - 10, y0 + rh - 25))
+    second = find(("rossi", "firmato", "giulia"), (xs[0] + 20, y0 + rh + 25, xs[1] - 10, y0 + 2 * rh - 25))
     if not first or not second:
-        check("background: lines found", False, str(list(lines)))
+        check("background: lines found", False)
         return
 
     def crop(rect):
