@@ -193,7 +193,7 @@ function loadDoc(info) {
   setCurrent(0);
   refreshHand();
   renderInkList();
-  toast(`Aperto “${info.name}”`, "ok");
+  if (!S.quietLoad) toast(`Aperto “${info.name}”`, "ok");
 }
 
 function updateInfo(info) {
@@ -314,7 +314,7 @@ async function loadThumb(P) {
 function drawOverlay(P) {
   if (!P.data) return;
   const s = scale(), ov = P.overlay;
-  $$(".blk, .ink, .hit, .obj, .diff", ov).forEach(n => n.remove());
+  $$(".blk, .ink, .hit, .obj, .diff, .multi-box, .ruler, .guide", ov).forEach(n => n.remove());
   const frag = document.createDocumentFragment();
   P.data.blocks.forEach(b => {
     const d = document.createElement("div");
@@ -439,6 +439,7 @@ function bindOverlay(P) {
     if (e.button !== 0 || e.target.closest(".editor")) return;
     if (S.tool === "erase") return startErase(P, e);
     if (S.tool === "mark") return startRect(P, e, rect => markInk(P, rect));
+    if (multiSelectDown(P, e)) return;
     if (startElementDrag(P, e)) return;
     if (toolMouseDown(P, e)) return;
   });
@@ -1568,7 +1569,7 @@ document.addEventListener("mouseover", e => {
 });
 
 // drag & drop (the file path is resolved by the Python side)
-document.addEventListener("dragover", e => { e.preventDefault(); if (S.dragPage == null) document.body.classList.add("drag-over"); });
+document.addEventListener("dragover", e => { e.preventDefault(); if (S.dragPage == null && S.dragSide == null) document.body.classList.add("drag-over"); });
 document.addEventListener("dragleave", e => { if (!e.relatedTarget) document.body.classList.remove("drag-over"); });
 document.addEventListener("drop", e => { e.preventDefault(); document.body.classList.remove("drag-over"); });
 window.addEventListener("resize", debounce(() => { positionEditBar(); positionPop(); }, 50));
@@ -1591,6 +1592,8 @@ const TOUR = [
     text: "Con lo strumento A mano clicca un punto vuoto della pagina e scrivi, oppure clicca una scritta esistente per riscriverla: il testo viene composto con le lettere della pagina, nello stesso inchiostro. Poi salva o esporta in Word ed Excel." },
   { icon: "i-marker", title: "Annota, firma, oscura", keys: ["A", "F", "X", "O"],
     text: "Annota (A) per evidenziare, sottolineare, lasciare note e forme; Firma (F) per mettere la tua firma o un'immagine; Oscura (X) per eliminare per sempre dati riservati. Con Modifica o Oggetti (O) prendi e trascina testi, scritte, firme e immagini. Il pulsante con i due fogli unisce o divide PDF interi; trascina le miniature per riordinare le pagine." },
+  { icon: "i-columns", title: "Più documenti, leggere e presentare", keys: ["F5"],
+    text: "Ogni PDF si apre in una scheda; con il pulsante delle due colonne ne affianchi un altro e trascini le pagine tra i due. Nella scheda Documento rendi cercabile una scansione, traduci il documento o lo converti; in alto puoi farlo leggere ad alta voce o presentarlo a schermo intero (F5)." },
   { icon: "i-download", title: "Sempre aggiornato",
     text: "Quando su GitHub esce una nuova versione, Calamo la scarica da solo e la installa alla chiusura. Puoi disattivarlo nelle Impostazioni." },
 ];

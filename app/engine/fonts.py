@@ -58,6 +58,9 @@ def family_key(name, serif=False, mono=False):
     for key in FAMILIES:
         if key in low:
             return key
+    # the name wins over the flags: text written by PyMuPDF (Nimbus Sans...) is flagged serif
+    if "sans" in low or "grotesk" in low or "gothic" in low:
+        return "arial"
     if "roman" in low or "serif" in low and "sans" not in low:
         return "times"
     if mono or "mono" in low or "code" in low:

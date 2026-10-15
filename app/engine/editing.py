@@ -283,14 +283,15 @@ class EditingMixin:
         page.delete_image(xref)
         return self._stamp(page, self._shown(page, rect), png, IMG_TAG)
 
-    def move_object(self, index, src, oid, rect):
+    def move_object(self, index, src, oid, rect, checkpoint=True):
         """Move / resize an object (rect in displayed coordinates)."""
         with self.lock:
             page = self.doc[index]
             rect = fitz.Rect(rect)
             if rect.width < 2 or rect.height < 2:
                 raise RuntimeError("Troppo piccolo.")
-            self._checkpoint(index)
+            if checkpoint:
+                self._checkpoint(index)
             if src == "image":
                 a = self._content_image_to_stamp(page, int(oid))
             else:
@@ -316,6 +317,13 @@ class EditingMixin:
             else:
                 a.set_rect(self._text_rect(page, rect))
                 a.update()
+                # a border makes the box grow when it is redrawn: put it where it was asked
+                got = self._shown(page, a.rect)
+                if max(abs(got.x0 - rect.x0), abs(got.y0 - rect.y0), abs(got.x1 - rect.x1), abs(got.y1 - rect.y1)) > 0.3:
+                    fix = fitz.Rect(2 * rect.x0 - got.x0, 2 * rect.y0 - got.y0, 2 * rect.x1 - got.x1, 2 * rect.y1 - got.y1)
+                    if fix.width > 2 and fix.height > 2:
+                        a.set_rect(self._text_rect(page, fix))
+                        a.update()
             self._touch(index)
             return {"objects": self.objects(index), "id": a.xref}
 
@@ -352,7 +360,7 @@ class EditingMixin:
             return {"objects": self.objects(index)}
 
     # ================================================================== dragging page content
-    def move_block(self, index, bbox, dx, dy):
+    def move_block(self, index, bbox, dx, dy, checkpoint=True):
         """Drag a block of digital text: every piece is written again, with its own font,
         size and colour, dx/dy further on (displayed coordinates); the original is removed."""
         from .document import REDACT_KW, _append_words, _to_text, _write_upright
@@ -367,7 +375,8 @@ class EditingMixin:
             dy = max(min(float(dy), R.y1 - old.y1), R.y0 - old.y0)
             if abs(dx) < 0.5 and abs(dy) < 0.5:
                 return self.blocks(index)
-            self._checkpoint(index)
+            if checkpoint:
+                self._checkpoint(index)
             pieces = []
             for l in lines:
                 for sp in l["spans"]:
@@ -390,7 +399,7 @@ class EditingMixin:
             res["moved"] = [old.x0 + dx, old.y0 + dy, old.x1 + dx, old.y1 + dy]
             return res
 
-    def move_ink(self, index, line_id, dx, dy):
+    def move_ink(self, index, line_id, dx, dy, checkpoint=True):
         """Drag a line of a scan (handwriting or print read by Calamo): only the ink is
         lifted - the paper, a highlighter or a table under it stay - and put down dx/dy
         further on; where it was, the paper is rebuilt."""
@@ -410,7 +419,8 @@ class EditingMixin:
             png, area = self._lift_ink(page, box)
             if png is None:
                 raise RuntimeError("Non trovo inchiostro in questa riga.")
-            self._checkpoint(index)
+            if checkpoint:
+                self._checkpoint(index)
             if not self._cover_letters(page, box):
                 self._cover(page, box)
             _image_upright(page, fitz.Rect(area.x0 + dx, area.y0 + dy, area.x1 + dx, area.y1 + dy), png)

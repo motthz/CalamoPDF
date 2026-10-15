@@ -1,6 +1,7 @@
 """Calamo PDF Studio - desktop entry point."""
 import json
 import os
+import re
 import sys
 import threading
 import traceback
@@ -18,6 +19,8 @@ sys.path.insert(0, BASE)
 
 from engine import export  # noqa: E402
 from engine import files as FILES  # noqa: E402
+from engine import convert as CONVERT  # noqa: E402
+from engine import extras as EX  # noqa: E402
 from engine import fonts as F  # noqa: E402
 from engine import handwriting as HW  # noqa: E402
 from engine.handreader import READER  # noqa: E402
@@ -66,7 +69,8 @@ def safe(fn):
 
 class Api:
     def __init__(self):
-        self._s = Session()
+        self._tabs = [Session()]         # the open documents, one per tab
+        self._ti = 0
         self._window = None
         self._settings = {**SETTINGS_DEFAULT, **load_json("settings.json", {})}
         if any(k in self._settings for k in OBSOLETE_SETTINGS):
@@ -86,6 +90,81 @@ class Api:
         from engine.lexicon import LEXICON
         threading.Thread(target=LEXICON._load, daemon=True).start()
         self.startup_path = next((a for a in sys.argv[1:] if a.lower().endswith(".pdf") and os.path.exists(a)), None)
+
+    # ---------------------------------------------------------------- tabs
+    @property
+    def _s(self):
+        return self._tabs[self._ti]
+
+    def _new_session(self):
+        s = Session()
+        s.learning = self._tabs[0].learning          # one memory of corrections for all tabs
+        return s
+
+    def _adopt(self, session):
+        """Show a newly opened document: in this tab if it is empty, else in a new one."""
+        if self._s.doc is None:
+            self._tabs[self._ti] = session
+        else:
+            self._tabs.append(session)
+            self._ti = len(self._tabs) - 1
+        self._cancel_gen += 1                         # readings of the tab left behind stop
+        return session.info()
+
+    def _tabs_public(self):
+        return {"active": self._ti, "tabs": [{"i": k, "name": t.info()["name"] if t.doc else "Nuova scheda",
+                                              "dirty": bool(t.doc and t.dirty), "pages": len(t.doc) if t.doc else 0,
+                                              "path": t.path} for k, t in enumerate(self._tabs)]}
+
+    @safe
+    def tabs(self):
+        return self._tabs_public()
+
+    @safe
+    def switch_tab(self, i):
+        if not (0 <= int(i) < len(self._tabs)):
+            raise RuntimeError("Scheda non trovata.")
+        self._ti = int(i)
+        self._cancel_gen += 1
+        return self._s.info() if self._s.doc else None
+
+    @safe
+    def close_tab(self, i):
+        i = int(i)
+        if not (0 <= i < len(self._tabs)):
+            raise RuntimeError("Scheda non trovata.")
+        learning = self._tabs[0].learning
+        self._tabs.pop(i)
+        if not self._tabs:
+            self._tabs = [Session()]
+            self._tabs[0].learning = learning
+            self._ti = 0
+        elif self._ti > i:
+            self._ti -= 1
+        elif self._ti == i:
+            self._ti = min(i, len(self._tabs) - 1)
+        self._cancel_gen += 1
+        return {"info": self._s.info() if self._s.doc else None, **self._tabs_public()}
+
+    @safe
+    def dirty_tabs(self):
+        return [k for k, t in enumerate(self._tabs) if t.doc and t.dirty]
+
+    @safe
+    def tab_info(self, i):
+        t = self._tabs[int(i)]
+        return t.info() if t.doc else None
+
+    @safe
+    def render_tab(self, i, index, scale):
+        return self._tabs[int(i)].render(index, scale, "jpeg")
+
+    @safe
+    def copy_pages(self, src_tab, pages, dst_tab, at):
+        """Drag pages from one open document to another (or within the same one)."""
+        src, dst = self._tabs[int(src_tab)], self._tabs[int(dst_tab)]
+        res = dst.insert_from(src, pages, at)
+        return {**res, "tab": int(dst_tab)}
 
     # ---------------------------------------------------------------- helpers
     def _js(self, code):
@@ -232,7 +311,7 @@ class Api:
         self._window.destroy()
 
     def _on_closing(self):
-        if self._closing_ok or not (self._s.doc and self._s.dirty):
+        if self._closing_ok or not any(t.doc and t.dirty for t in self._tabs):
             return True
         self._js("app.requestClose()")
         return False
@@ -250,14 +329,20 @@ class Api:
         return self._open(path)
 
     def _open(self, path, password=None):
+        # already open: go to its tab
+        for k, t in enumerate(self._tabs):
+            if t.path and t.doc and os.path.normcase(os.path.abspath(t.path)) == os.path.normcase(os.path.abspath(path)):
+                self._ti = k
+                return t.info()
+        s = self._new_session()
         try:
-            info = self._s.open(path, password)
+            s.open(path, password)
         except RuntimeError as e:
             if str(e) in ("PASSWORD_REQUIRED", "PASSWORD_WRONG"):
                 return {"needPassword": True, "path": path, "wrong": str(e) == "PASSWORD_WRONG"}
             raise
         self._remember(path)
-        return info
+        return self._adopt(s)
 
     @safe
     def open_with_password(self, path, password):
@@ -265,7 +350,9 @@ class Api:
 
     @safe
     def new_doc(self):
-        return self._s.new_blank()
+        s = self._new_session()
+        s.new_blank()
+        return self._adopt(s)
 
     @safe
     def info(self):
@@ -278,7 +365,7 @@ class Api:
         return self._s.save()
 
     def _save_as(self):
-        name = os.path.basename(self._s.path) if self._s.path else "Documento.pdf"
+        name = os.path.basename(self._s.path) if self._s.path else (self._s.title or "Documento.pdf")
         res = self._window.create_file_dialog(_dialog_kind("SAVE"), save_filename=name,
                                              file_types=("Documenti PDF (*.pdf)",))
         if not res:
@@ -385,6 +472,100 @@ class Api:
             return None
         folder = res[0] if isinstance(res, (list, tuple)) else res
         return FILES.split(src, base, folder, mode, value)
+
+    # ---------------------------------------------------------------- convert
+    def _adopt_bytes(self, data, title):
+        s = self._new_session()
+        s.open_bytes(data, title)
+        return self._adopt(s)
+
+    @safe
+    def convert_files(self):
+        """Word, Excel, PowerPoint, images, web pages... to PDF: opened in a new tab."""
+        import tempfile
+        paths = self._pick("Documenti e immagini", CONVERT.ALL_EXT, multiple=True)
+        if not paths:
+            return None
+        out = os.path.join(tempfile.mkdtemp(prefix="calamo-conv-"), "conv.pdf")
+        res = CONVERT.files_to_pdf(paths, out)
+        with open(out, "rb") as f:
+            data = f.read()
+        base = os.path.splitext(os.path.basename(paths[0]))[0]
+        info = self._adopt_bytes(data, base + ".pdf")
+        return {"info": info, "how": res["how"], "files": len(paths)}
+
+    @safe
+    def convert_url(self, url):
+        import tempfile
+        out = os.path.join(tempfile.mkdtemp(prefix="calamo-web-"), "web.pdf")
+        try:
+            CONVERT.url_to_pdf(url, out)
+        except Exception as e:
+            raise RuntimeError(f"Non riesco a scaricare la pagina: {e}")
+        with open(out, "rb") as f:
+            data = f.read()
+        host = re.sub(r"^https?://", "", url).split("/")[0] or "Pagina web"
+        return {"info": self._adopt_bytes(data, host + ".pdf")}
+
+    @safe
+    def export_images(self, spec, fmt="png", dpi=150):
+        from engine.editing import parse_pages
+        pages = parse_pages(spec, len(self._s.doc))
+        res = self._window.create_file_dialog(_dialog_kind("FOLDER"))
+        if not res:
+            return None
+        folder = res[0] if isinstance(res, (list, tuple)) else res
+        with self._s.lock:
+            return CONVERT.pdf_to_images(self._s.doc, pages, folder, self._base(), fmt, dpi)
+
+    # ---------------------------------------------------------------- searchable, tables, arrange, reading, translation
+    @safe
+    def make_searchable(self, index):
+        return self._s.make_searchable(index)
+
+    @safe
+    def tables(self, index):
+        return self._s.tables(index)
+
+    @safe
+    def table_cells(self, index, tid):
+        return self._s.table_cells(index, tid)
+
+    @safe
+    def edit_table(self, index, tid, changes):
+        return self._s.edit_table(index, tid, changes)
+
+    @safe
+    def table_row(self, index, tid, r, op):
+        return self._s.table_row(index, tid, r, op)
+
+    @safe
+    def arrange(self, index, moves):
+        return self._s.arrange(index, moves)
+
+    @safe
+    def reading_order(self, index):
+        return self._s.reading_order(index)
+
+    @safe
+    def languages_translate(self):
+        return [[k, v] for k, v in EX.LANGS.items()]
+
+    @safe
+    def translate_doc(self, target):
+        """A translated copy of the document, in a new tab (the original is not touched)."""
+        import copy
+        src = self._s
+        with src.lock:
+            data = src.doc.tobytes()
+            ink, hands = copy.deepcopy(src.ink), copy.deepcopy(src.hands)
+        base = os.path.splitext(src.info()["name"])[0]
+        s = self._new_session()
+        s.open_bytes(data, f"{base} ({target.split('-')[0].upper()}).pdf")
+        s.ink, s.hands = ink, hands
+        done = s.translate_into(target, EX.translate_texts, self._progress("Traduzione"))
+        info = self._adopt(s)
+        return {"info": info, "translated": done}
 
     @safe
     def move_block(self, index, bbox, dx, dy):

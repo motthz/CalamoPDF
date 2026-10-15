@@ -2,6 +2,32 @@
 
 **Tutti gli strumenti per lavorare sui PDF, oltre alla scrittura a mano.**
 
+**Più documenti insieme**
+- **Schede**: ogni PDF si apre in una sua scheda sopra la pagina (aprirne uno nuovo non chiude quello attuale). Ctrl+Tab passa alla successiva, Ctrl+W chiude; alla chiusura Calamo chiede di salvare ogni documento modificato.
+- **Affianca**: il pulsante in alto nella colonna delle pagine mostra le pagine di un altro documento aperto; trascina le pagine da una colonna all'altra per copiarle tra i due PDF.
+
+**Rendi cercabile (OCR)** (scheda *Documento*)
+- Calamo legge tutte le pagine scansionate, anche la scrittura a mano, e aggiunge un testo invisibile al posto giusto: il PDF diventa cercabile e il testo si può copiare, anche in altri programmi.
+
+**Converti**
+- **In PDF**: Word, Excel, PowerPoint, immagini e foto (raddrizzate), pagine web (anche da indirizzo), testo. Con Microsoft Office o LibreOffice installato l'impaginazione è identica; senza, Calamo converte da solo testo, titoli e tabelle di Word ed Excel. Più file diventano un unico PDF.
+- **Da PDF a immagini**: PNG o JPG, alla qualità che serve.
+
+**Tabelle modificabili** (scheda *Pagina*)
+- Cambia il testo delle celle con il carattere della tabella (va a capo o si stringe nella cella), **aggiungi** una riga sotto quella scelta o **togline** una: le righe sotto scorrono, il bordo della tabella si allunga o si accorcia e il testo sotto la tabella si sposta.
+
+**Griglia, guide e allineamento** (strumento *Oggetti*)
+- **Guide magnetiche**: mentre trascini, testi e oggetti si agganciano ai bordi e ai centri degli altri e al centro della pagina.
+- **Griglia con righello** in centimetri (aggancio ogni 0,5 cm).
+- **Maiusc+clic** per scegliere più elementi: allineali (sinistra, centro, destra, alto, centro, basso) o distribuiscili a distanze uguali; un elemento solo si allinea alla pagina.
+
+**Traduci** (scheda *Documento*)
+- Crea una copia tradotta in un'altra lingua in una nuova scheda: ogni testo viene riscritto nel suo riquadro con il suo carattere (più piccolo se la traduzione è più lunga) e la scrittura a mano letta da Calamo con la stessa calligrafia. Serve la connessione a internet (servizio di Google).
+
+**Leggi e presenta**
+- **Lettura ad alta voce** con le voci di Windows: legge la pagina nell'ordine giusto (anche a due colonne e la scrittura a mano letta), evidenzia la frase letta e prosegue con le pagine successive; velocità e voce regolabili.
+- **Presentazione a schermo intero** (F5): una pagina alla volta, frecce o clic per andare avanti, Esc per uscire.
+
 **Unisci e dividi PDF interi** (pulsante nella barra o nella schermata iniziale, anche senza documento aperto)
 - **Unisci** più PDF in un nuovo file: li metti in ordine trascinandoli, per ognuno puoi prendere solo alcune pagine ("1-3, 5"), puoi aggiungere il documento aperto con le sue modifiche. Ogni file diventa un segnalibro, e i segnalibri dei file restano.
 - **Dividi** un PDF in più file: ogni N pagine, per intervalli ("1-3, 4-6, 7-"), una pagina per file, un file per capitolo (segnalibri) o in file al massimo di N MB (per le email).
@@ -38,6 +64,7 @@
 **Correzioni**
 - Il testo scritto o modificato *dopo un salvataggio* poteva risultare illeggibile quando lo si copiava o cercava (a vista era giusto): ora resta sempre corretto.
 - Gli spazi del testo scritto da Calamo con i font di Windows (Arial, Times, Calibri…) venivano registrati come "spazi non separabili": copiando il testo o cercando più parole insieme non si trovava nulla. Ora sono spazi normali.
+- La ricerca trova anche le parole scritte con legature tipografiche ("ﬃ", "ﬂ"), comuni nei PDF fatti da Word.
 - Un evidenziatore giallo molto acceso veniva scambiato per inchiostro, e riscrivendo una scritta evidenziata il giallo spariva: ora resta.
 
 ## Calamo PDF Studio 1.3.2

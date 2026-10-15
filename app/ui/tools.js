@@ -61,6 +61,7 @@ function drawExtras(P, frag, s) {
     });
     if (S.sel && S.sel.page === P.i) updateObjButtons();
   }
+  drawMulti(P, frag, s);
   S.sens.forEach((h, k) => {
     if (h.page !== P.i || !h.on) return;
     const d = document.createElement("div");
@@ -166,12 +167,16 @@ function dragObject(P, o, e, resize) {
     if (resize) {
       const w = Math.max(8, r0[2] - r0[0] + dx);
       rect = [r0[0], r0[1], r0[0] + w, keep ? r0[1] + w * ratio : Math.max(r0[1] + 8, r0[3] + dy)];
-    } else rect = [r0[0] + dx, r0[1] + dy, r0[2] + dx, r0[3] + dy];
+    } else {
+      const d = snapDrag(P, r0, { x: dx, y: dy }, { kind: "obj", id: o.id });
+      rect = [r0[0] + d.x, r0[1] + d.y, r0[2] + d.x, r0[3] + d.y];
+    }
     if (el) Object.assign(el.style, box(rect, s, 2));
   };
   const up = async () => {
     window.removeEventListener("mousemove", move);
     window.removeEventListener("mouseup", up);
+    clearGuides(P);
     if (!moved) return;
     await guarded(async () => objectsChanged(P, await call("move_object", P.i, o.src, o.id, rect)));
   };
@@ -526,7 +531,6 @@ $("#mergeAddCurrent").onclick = () => {
 };
 $("#mergeGo").onclick = async () => {
   const open = $("#mergeOpen").checked;
-  if (open && !(await confirmDiscard())) return;
   await guarded(async () => {
     const r = await call("merge_files", FM.items.map(it => ({ path: it.path, pages: it.spec || "" })), open);
     if (!r) return;
@@ -576,6 +580,7 @@ function startElementDrag(P, e) {
   const move = ev => {
     const b = pagePoint(P, ev);
     d = { x: b.x - a.x, y: b.y - a.y };
+    if (ghost) d = snapDrag(P, bb, d, { kind: isInk ? "ink" : "blk", id: item.id });
     if (!ghost) {
       if (Math.abs(d.x) + Math.abs(d.y) < 5) return;
       ghost = document.createElement("div");
@@ -595,6 +600,7 @@ function startElementDrag(P, e) {
     window.removeEventListener("mousemove", move);
     window.removeEventListener("mouseup", up);
     document.body.classList.remove("dragging-el");
+    clearGuides(P);
     if (!ghost) return;
     S.suppressClick = Date.now();
     await guarded(async () => {

@@ -24,6 +24,13 @@
 | 👥 **Più scritture sullo stesso foglio** | Calamo separa le righe di persone diverse (colore dell'inchiostro, spessore del tratto, inclinazione, dimensione) e i caratteri stampati: ogni riga viene riscritta solo con le lettere della sua scrittura, mai mescolate. Una scrittura si può rinominare, *ricordare* con un nome e usare su altre pagine o documenti quando lo scegli tu. |
 | 🖨️ **Stampato identico alla scansione** | Lo stampato riscritto usa le lettere ritagliate dalla scansione stessa, con la stessa spaziatura, linea di base e dimensione; le lettere mancanti usano il font di sistema più simile, con lo stesso spessore e la stessa sfocatura. Resta cercabile. |
 | 🔎 **Lettura più completa** | Una seconda lettura con contrasto migliorato recupera la scrittura chiara (matita, penne scariche, ombre delle foto); l'inchiostro che resta illeggibile viene segnalato in arancione per scriverne la lettura. |
+| 🗂️ **Schede e documenti affiancati** | Più PDF aperti insieme in schede; affiancane due e trascina le pagine dall'uno all'altro. |
+| 🔍 **Rendi cercabile (OCR)** | Le scansioni (anche scritte a mano) ricevono un testo invisibile: il PDF si può cercare e copiare ovunque. |
+| 🔁 **Converti** | Word, Excel, PowerPoint, immagini, pagine web e testo in PDF; pagine del PDF in immagini PNG o JPG. |
+| ▦ **Tabelle modificabili** | Cambia le celle, aggiungi o togli righe mantenendo l'aspetto della tabella. |
+| 📐 **Guide e allineamento** | Guide magnetiche, griglia con righello, allinea e distribuisci più elementi. |
+| 🌍 **Traduci** | Copia tradotta con la stessa impaginazione, anche delle parti scritte a mano. |
+| 🔊 **Leggi e presenta** | Lettura ad alta voce con le voci di Windows e presentazione a schermo intero. |
 | 📚 **Unisci e dividi PDF** | Unisci più PDF interi (anche solo alcune pagine di ciascuno) in un nuovo file con un segnalibro per file; dividi un PDF ogni N pagine, per intervalli, una pagina per file, per capitoli o per dimensione. |
 | ✋ **Prendi e trascina** | Trascina testi (con il loro carattere), scritte delle scansioni (solo le lettere, lo sfondo resta), firme, immagini, note e forme. |
 | 📑 **Pagine** | Riordina trascinando le miniature, inserisci altri PDF, duplica, estrai pagine in un nuovo file. |

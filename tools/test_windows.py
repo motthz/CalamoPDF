@@ -552,6 +552,66 @@ def test_editing():
     check("files: split by ranges", [len(fitz.open(f)) for f in r["files"]] == [2, 2], str([os.path.basename(f) for f in r["files"]]))
 
 
+def test_more():
+    """1.4: OCR layer with the real Windows OCR, conversions without Office, tables and
+    translation with Windows fonts."""
+    import io
+    import pymupdf as fitz
+    from PIL import Image
+    from engine.document import Session
+    from engine import convert as C
+    tmp = tempfile.mkdtemp(prefix="calamo-more-")
+    # searchable: read the sample with Windows OCR, then the writing can be searched
+    s = Session()
+    s.open(os.path.join(ROOT, "samples", "esempio.pdf"))
+    res = s.analyze(0)
+    words = [l["text"].split()[0] for l in res["ink"] if l["kind"] == "hand" and l["text"].split()]
+    r = s.make_searchable(0)
+    hit = s.doc[0].search_for(words[0]) if words else []
+    check("ocr: handwriting searchable after OCR", r["written"] > 0 and bool(hit), f"{r['written']} parole, cerco {words[:1]}")
+    # conversions: images and Word without Office (built-in or LibreOffice)
+    img = os.path.join(tmp, "foto.jpg")
+    Image.new("RGB", (900, 600), (180, 40, 40)).save(img)
+    out = os.path.join(tmp, "foto.pdf")
+    C.files_to_pdf([img], out)
+    check("convert: image to PDF", len(fitz.open(out)) == 1)
+    import docx
+    d = docx.Document()
+    d.add_heading("Relazione dopo il collaudo", 1)
+    d.add_paragraph("Affitto e ufficio.")
+    dp = os.path.join(tmp, "rel.docx")
+    d.save(dp)
+    out = os.path.join(tmp, "rel.pdf")
+    how = C.to_pdf(dp, out)
+    page = fitz.open(out)[0]
+    check("convert: Word to PDF", bool(page.search_for("dopo il collaudo")) or "collaudo" in page.get_text(), how)
+    imgs = C.pdf_to_images(fitz.open(out), [0], tmp, "rel", "png", 72)
+    check("convert: PDF to images", os.path.exists(imgs["files"][0]))
+    # a table rewritten with the Windows fonts
+    doc = fitz.open()
+    p = doc.new_page()
+    X, Y = [72, 220, 360], [100, 125, 150, 175]
+    for x in X:
+        p.draw_line((x, Y[0]), (x, Y[-1]))
+    for y in Y:
+        p.draw_line((X[0], y), (X[-1], y))
+    for r_, row in enumerate([["Voce", "Importo"], ["Affitto", "1200"], ["Luce", "80"]]):
+        for c_, t in enumerate(row):
+            p.insert_text((X[c_] + 4, Y[r_] + 17), t, fontsize=10)
+    tp = os.path.join(tmp, "tab.pdf")
+    doc.save(tp)
+    s = Session()
+    s.open(tp)
+    s.edit_table(0, 0, [{"r": 1, "c": 0, "text": "Affitto ufficio"}])
+    s.table_row(0, 0, 2, "add")
+    cells = s.table_cells(0, 0)["cells"]
+    check("table: cell edited and row added", len(cells) == 4 and cells[1][0] == "Affitto ufficio", str(cells))
+    check("table: spaces real in the new text", bool(s.doc[0].search_for("Affitto ufficio")))
+    # translation keeps the layout (a fake translator: the service is online)
+    s.translate_into("en", lambda texts, tgt: [t.replace("Voce", "Item").replace("Luce", "Electricity") for t in texts])
+    check("translate: text rewritten in place", any("Electricity" in b["text"] for b in s.blocks(0)["blocks"]))
+
+
 def test_setup_script():
     import updater
     text = updater.build_script({"kind": "setup"}, r"C:\T\CalamoPDF-Setup.exe", True,
@@ -571,7 +631,7 @@ def test_release_check():
 
 if __name__ == "__main__":
     for t in (test_ocr, test_writings, test_skewed_scan, test_handreader, test_reader_in_analysis, test_table_form, test_rewrite_keeps_background, test_remove_and_mark,
-              test_rotated_page_edit, test_editing, test_portable_swap, test_setup_script, test_release_check):
+              test_rotated_page_edit, test_editing, test_more, test_portable_swap, test_setup_script, test_release_check):
         try:
             t()
         except Exception as e:

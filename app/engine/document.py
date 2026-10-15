@@ -17,8 +17,11 @@ from . import writers as WR
 from .handwriting import HandwritingLibrary, PageWritings
 from .lexicon import LEXICON, WORD_RE
 from .editing import EditingMixin
+from .extras import ExtrasMixin
 from .ocr import PRINT_BELOW, Learning, prepare_page, read_page, read_region
 
+# search expands typographic ligatures ("ﬃ" is found by "ffi")
+SEARCH_FLAGS = fitz.TEXT_DEHYPHENATE | fitz.TEXT_PRESERVE_WHITESPACE | fitz.TEXT_MEDIABOX_CLIP
 REDACT_KW = dict(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=fitz.PDF_REDACT_LINE_ART_NONE)
 try:
     REDACT_KW["text"] = fitz.PDF_REDACT_TEXT_REMOVE
@@ -185,7 +188,7 @@ def _find_in_line(line, term):
     return out
 
 
-class Session(EditingMixin):
+class Session(EditingMixin, ExtrasMixin):
     MAX_UNDO = 40
 
     def __init__(self):
@@ -199,6 +202,7 @@ class Session(EditingMixin):
         self.ignored = {}        # page index -> [rect]: "this is not writing", said by the user
         self.learning = Learning()
         self.resolver = None
+        self.title = None        # name of a document not saved yet (converted, translated...)
         self.version = 0         # bumps on every change, per page versions below
         self.page_versions = {}
 
@@ -223,6 +227,19 @@ class Session(EditingMixin):
             self.version += 1
             return self.info()
 
+    def open_bytes(self, data, title):
+        """A document made in Calamo (converted, merged, translated): not on disk yet."""
+        with self.lock:
+            doc = fitz.open(stream=data, filetype="pdf")
+            self.doc, self.path, self.title, self._password = doc, None, title, None
+            self.dirty = True
+            self.undo_stack, self.redo_stack = [], []
+            self.ink, self.page_versions, self.hands = {}, {}, {}
+            self.ignored = {}
+            self.resolver = F.FontResolver(doc)
+            self.version += 1
+            return self.info()
+
     def new_blank(self):
         with self.lock:
             doc = fitz.open()
@@ -239,7 +256,7 @@ class Session(EditingMixin):
     def info(self):
         pages = [{"w": p.rect.width, "h": p.rect.height, "v": self.page_versions.get(i, 0)}
                  for i, p in enumerate(self.doc)]
-        return {"path": self.path, "name": os.path.basename(self.path) if self.path else "Senza titolo.pdf",
+        return {"path": self.path, "name": os.path.basename(self.path) if self.path else (self.title or "Senza titolo.pdf"),
                 "pages": pages, "dirty": self.dirty, "canUndo": bool(self.undo_stack),
                 "canRedo": bool(self.redo_stack), "analyzed": sorted(self.ink.keys())}
 
@@ -798,7 +815,7 @@ class Session(EditingMixin):
             if not term:
                 return hits
             for i, page in enumerate(self.doc):
-                for r in page.search_for(term):
+                for r in page.search_for(term, flags=SEARCH_FLAGS):
                     r = _shown(page, r)
                     hits.append({"page": i, "bbox": [r.x0, r.y0, r.x1, r.y1], "kind": "text"})
                 for j, l in enumerate(self.ink.get(i, [])):
