@@ -71,12 +71,40 @@ LOWER = set("abcdefghijklmnopqrstuvwxyzàèéìòù")
 CAP_TO_X = 0.68          # x-height / cap-height of a typical writing
 
 
+def _ink_band(page, r):
+    """The rows really taken by the writing of a line. The OCR box of a handwritten line
+    is sometimes much thinner than the letters (it keeps only their middle): the band of
+    ink around it, up to the first empty row above and below, is measured instead."""
+    try:
+        h = r.height
+        ext = fitz.Rect(r.x0, r.y0 - 1.5 * h, r.x1, r.y1 + 1.5 * h) & page.rect
+        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=ext, alpha=False)
+        gray = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3].mean(axis=2)
+        ink = gray < min(float(np.percentile(gray, 92)) - 40, 200)
+        rows = ink.mean(axis=1) > 0.004
+        c0, c1 = int((r.y0 - ext.y0) * 2), int((r.y1 - ext.y0) * 2)
+        if not rows[c0:c1].any():
+            return r
+        top, bot = c0, c1
+        while top > 0 and rows[top - 1]:
+            top -= 1
+        while bot < len(rows) and rows[bot]:
+            bot += 1
+        y0, y1 = ext.y0 + top / 2, ext.y0 + bot / 2
+        # only when the box clearly missed part of the letters, and the band is one line
+        if (y1 - y0) > h * 1.25 and (y1 - y0) < h * 4:
+            return fitz.Rect(r.x0, min(r.y0, y0), r.x1, max(r.y1, y1))
+    except Exception:
+        pass
+    return r
+
+
 def measure_line(page, bbox, text=""):
     """Baseline (page y) and x-height (pt) of a line, measured on its ink.
     Letters are stored and composed relative to these two, like type: so letters coming
     from different lines (with or without ascenders and descenders) share one size and
     sit on one baseline, and new text matches the line it replaces."""
-    r = fitz.Rect(bbox)
+    r = _ink_band(page, fitz.Rect(bbox))
     try:
         pix = page.get_pixmap(matrix=fitz.Matrix(S, S), clip=r & page.rect, alpha=False)
         rgb = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3]
@@ -114,7 +142,9 @@ def _line_borders(page, rect):
     ctx = fitz.Rect(rect.x0 - 4 * h, rect.y0 - h, rect.x1 + 4 * h, rect.y1 + h) & page.rect
     big = page.get_pixmap(matrix=fitz.Matrix(S, S), clip=ctx, alpha=False)
     rgb = np.frombuffer(big.samples, dtype=np.uint8).reshape(big.height, big.width, big.n)[:, :, :3]
-    letters, vert, horiz, ink = analyse(rgb, h * S / 1.3)
+    # an OCR box can be much thinner than the writing: a border is told from a letter by
+    # being longer than any letter could be, so never assume lines smaller than 12 pt
+    letters, vert, horiz, ink = analyse(rgb, max(h, 12.0) * S / 1.3)
     return (big.x, big.y), vert | horiz
 
 

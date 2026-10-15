@@ -5,7 +5,7 @@
 - Viene ricostruito solo il posto delle lettere: l'**evidenziatore continua** (anche dove finisce a metà parola), le **tabelle non si deformano** e le righe che attraversavano le lettere proseguono.
 - Il nuovo testo resta **dentro la sua cella**: se è più lungo va a capo nella cella o viene stretto, senza superare il bordo.
 - Le lettere imparate dalla pagina e la misura della riga non includono più pezzi di bordi o di sottolineature.
-- Funziona anche quando il riquadro letto è più piccolo della scritta (lettere alte, code, pagine ruotate): vengono tolte le lettere intere.
+- Funziona anche quando il riquadro letto è più piccolo della scritta (lettere alte, code, pagine ruotate): vengono tolte le lettere intere, e il testo nuovo ha la grandezza della scritta vera, non del riquadro.
 - Corretto un difetto della 1.3.1: il lettore scambiava le aste alte delle lettere (l, t) per bordi di tabella.
 
 ## Calamo PDF Studio 1.3.1
