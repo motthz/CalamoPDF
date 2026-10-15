@@ -215,14 +215,14 @@ def _components(mask):
     return list(merged.values())
 
 
-def rules(mask, band, chain=3, fill=0.7, chain_h=None):
+def rules(mask, band, chain=3, fill=0.7, chain_h=None, axes=(0, 1)):
     """Pixels of long thin lines: table borders, underlines, ruled paper, also drawn by
     hand or slanting in a photo. The page is cut into strips `band` px long; inside a
     strip a border fills (almost) a whole column (or row); it is a border when that
     continues, give or take a couple of pixels, over `chain` strips in a row - longer
     than any stroke of a letter."""
     out = np.zeros_like(mask)
-    for axis in (0, 1):                      # 0: vertical lines, 1: horizontal lines
+    for axis in axes:                        # 0: vertical lines, 1: horizontal lines
         m = mask if axis == 0 else mask.T
         o = out if axis == 0 else out.T
         need = chain if axis == 0 or chain_h is None else chain_h

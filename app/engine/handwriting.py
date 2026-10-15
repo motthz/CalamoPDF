@@ -83,6 +83,9 @@ def measure_line(page, bbox, text=""):
         gray = rgb.mean(axis=2)
         bg = float(np.percentile(gray, 92))
         ink = gray < min(_otsu(gray.astype(np.uint8)), bg - 25)
+        lines = _lines_in(page, r & page.rect, pix)
+        if lines is not None:
+            ink &= ~lines                      # an underline or a border is not the baseline
         prof = np.convolve(ink.sum(axis=1).astype(np.float64), np.ones(3) / 3, mode="same")
         if prof.max() <= 0:
             raise ValueError
@@ -98,6 +101,40 @@ def measure_line(page, bbox, text=""):
         return float(r.y0 + base / S), float(xh)
     except Exception:
         return r.y0 + r.height * 0.78, r.height * 0.45
+
+
+_LINES = {}          # while a line is being learned: its borders, found once for all its words
+
+
+def _line_borders(page, rect):
+    """Borders and rules around a line of text: (pixmap origin, mask) at DPI."""
+    from .letters import analyse
+    rect = fitz.Rect(rect)
+    h = max(rect.height, 4)
+    ctx = fitz.Rect(rect.x0 - 4 * h, rect.y0 - h, rect.x1 + 4 * h, rect.y1 + h) & page.rect
+    big = page.get_pixmap(matrix=fitz.Matrix(S, S), clip=ctx, alpha=False)
+    rgb = np.frombuffer(big.samples, dtype=np.uint8).reshape(big.height, big.width, big.n)[:, :, :3]
+    letters, vert, horiz, ink = analyse(rgb, h * S / 1.3)
+    return (big.x, big.y), vert | horiz
+
+
+def _lines_in(page, clip, pix):
+    """Mask (same size as pix) of the borders and rules crossing clip, found on a wider
+    piece of the page (a line is told from a letter by how far it goes)."""
+    try:
+        clip = fitz.Rect(clip)
+        cached = _LINES.get(id(page))
+        if cached and cached[0].contains(clip):
+            (bx, by), lines = cached[1]
+        else:
+            (bx, by), lines = _line_borders(page, clip)
+        dx, dy = pix.x - bx, pix.y - by
+        out = np.zeros((pix.height, pix.width), bool)
+        part = lines[max(dy, 0):dy + pix.height, max(dx, 0):dx + pix.width]
+        out[:part.shape[0], :part.shape[1]] = part
+        return out if out.any() else None
+    except Exception:
+        return None
 
 
 class Glyph:
@@ -254,6 +291,17 @@ class HandwritingLibrary:
             else:
                 return
         lrect = fitz.Rect(line["bbox"])
+        try:                                   # the borders around the line, once for all its words
+            area = fitz.Rect(lrect.x0 - 2, lrect.y0 - lrect.height * 0.3, lrect.x1 + 2, lrect.y1 + lrect.height * 0.3)
+            _LINES[id(page)] = (area, _line_borders(page, area))
+        except Exception:
+            _LINES.pop(id(page), None)
+        try:
+            self._learn_line(page, line, lrect, labels, words, src)
+        finally:
+            _LINES.pop(id(page), None)
+
+    def _learn_line(self, page, line, lrect, labels, words, src):
         base, xh = measure_line(page, lrect, line["text"])
         self.heights.append(lrect.height)
         self.xhs.append(xh)
@@ -270,18 +318,24 @@ class HandwritingLibrary:
 
     @staticmethod
     def _ink(page, clip):
-        """Render clip and return (ink mask, alpha, rgb) at DPI."""
+        """Render clip and return (ink mask, alpha, rgb) at DPI. Borders, underlines and
+        ruled lines crossing the letters are not ink of the letters."""
         pix = page.get_pixmap(matrix=fitz.Matrix(S, S), clip=clip, alpha=False)
         rgb = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3]
+        lines = _lines_in(page, clip, pix)
         gray = (0.299 * rgb[:, :, 0] + 0.587 * rgb[:, :, 1] + 0.114 * rgb[:, :, 2]).astype(np.uint8)
         bg = float(np.percentile(gray, 92))
         thr = min(_otsu(gray), bg - 25)
         ink = gray < thr
+        if lines is not None:
+            ink &= ~lines
         if not ink.any():
             return ink, np.zeros_like(gray), rgb
         darkest = float(np.percentile(gray[ink], 5))
         alpha = np.clip((bg - gray.astype(np.float32)) / max(bg - darkest, 1) * 255, 0, 255).astype(np.uint8)
         alpha[~ink & (alpha < 90)] = 0
+        if lines is not None:
+            alpha[lines] = 0
         return ink, alpha, rgb
 
     @staticmethod

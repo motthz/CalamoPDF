@@ -382,6 +382,77 @@ def test_table_form():
     check("table: no cells glued together", not glued, str(glued))
 
 
+def test_rewrite_keeps_background():
+    """Rewriting a line changes only its letters: the highlighter goes on, the table and
+    the notebook rules stay, and the new text stays inside its cell."""
+    import io
+    import numpy as np
+    import pymupdf as fitz
+    from PIL import Image, ImageDraw, ImageFilter, ImageFont
+    from engine.document import Session
+    font = ImageFont.truetype(os.path.join(os.environ["WINDIR"], "Fonts", "Inkfree.ttf"), 58)
+    W, H = 1654, 760
+    img = Image.new("RGB", (W, H), (246, 245, 239))
+    d = ImageDraw.Draw(img, "RGBA")
+    for y in range(80, H, 105):                                  # notebook rules
+        d.line([(0, y), (W, y + 3)], fill=(150, 175, 220), width=3)
+    d.rectangle([110, 175, 820, 250], fill=(255, 235, 60, 150))  # highlighter
+    xs, y0, rh = [90, 860, 1250, 1580], 150, 180
+    ink = (30, 45, 140)
+    for i in range(3):
+        d.line([(xs[0], y0 + i * rh), (xs[-1], y0 + i * rh + 4)], fill=ink, width=4)
+    for x in xs:
+        d.line([(x, y0), (x + 3, y0 + 2 * rh)], fill=ink, width=4)
+    rows = [("Consegna entro venerdi", "Alta"), ("Firmato Giulia Rossi", "Media")]
+    for r, (a, b) in enumerate(rows):
+        d.text((xs[0] + 30, y0 + r * rh + 40), a, font=font, fill=ink)
+        d.text((xs[1] + 30, y0 + r * rh + 40), b, font=font, fill=ink)
+    img = img.filter(ImageFilter.GaussianBlur(0.6))
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=88)
+    k = 595 / W
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=H * k)
+    page.insert_image(page.rect, stream=buf.getvalue())
+    path = os.path.join(tempfile.mkdtemp(), "bg.pdf")
+    doc.save(path)
+    s = Session()
+    s.open(path)
+    r = s.analyze(0)
+    print("   righe:", [l["text"] for l in r["ink"]])
+
+    def find(words, area):
+        l = next((l for l in s._ink_public(0) if any(w in l["text"].lower() for w in words)), None)
+        if l is None:      # the OCR missed it among the lines of the table: outline it by hand
+            res = s.mark_ink(0, [v * k for v in area])
+            l = next((x for x in res["ink"] if x["id"] in res.get("added", [])), None)
+            print("   segnata a mano:", l and l["text"])
+        return l
+    first = find(("venerdi", "consegna", "entro"), (xs[0] + 20, y0 + 25, xs[1] - 10, y0 + rh - 25))
+    second = find(("rossi", "firmato", "giulia"), (xs[0] + 20, y0 + rh + 25, xs[1] - 10, y0 + 2 * rh - 25))
+    if not first or not second:
+        check("background: lines found", False)
+        return
+
+    def crop(rect):
+        pix = s.doc[0].get_pixmap(dpi=144, clip=fitz.Rect(rect))
+        return np.frombuffer(pix.samples, np.uint8).reshape(pix.h, pix.w, pix.n)[:, :, :3].astype(int)
+    b = fitz.Rect(first["bbox"])
+    s.edit_ink(0, first["id"], "Ok")
+    tail = crop([b.x0 + b.width * 0.4, b.y0 + 2, b.x1, b.y1 - 2])
+    yellow = ((tail[:, :, 0] > 200) & (tail[:, :, 1] > 190) & (tail[:, :, 2] < 170)).mean()
+    check("background: highlighter continues", yellow > 0.85, f"{yellow:.0%}")
+    check("background: old letters gone", (tail.mean(axis=2) < 120).mean() < 0.003, f"{(tail.mean(axis=2) < 120).mean():.3%}")
+    border = crop([xs[1] * k - 3, b.y0, xs[1] * k + 4, b.y1])
+    check("background: table border kept", (border.mean(axis=2) < 150).any(axis=1).mean() > 0.9)
+    b2 = fitz.Rect(second["bbox"])
+    s.edit_ink(0, second["id"], "Firmato Giulia Rossi e Marco Bianchi per delega del direttore")
+    past = crop([xs[1] * k + 2, b2.y0, xs[1] * k + 8, b2.y1])
+    check("background: long text stays in its cell", (past.mean(axis=2) < 110).mean() < 0.02)
+    under = crop([0, (y0 + 2 * rh) * k + 3, W * k, (y0 + 2 * rh) * k + 40])
+    check("background: nothing written below the table", (under.mean(axis=2) < 110).mean() < 0.002)
+
+
 def test_remove_and_mark():
     """'Not writing' removes a line for good; outlining missed writing reads it."""
     from engine.document import Session
@@ -424,7 +495,7 @@ def test_release_check():
 
 
 if __name__ == "__main__":
-    for t in (test_ocr, test_writings, test_skewed_scan, test_handreader, test_reader_in_analysis, test_table_form, test_remove_and_mark,
+    for t in (test_ocr, test_writings, test_skewed_scan, test_handreader, test_reader_in_analysis, test_table_form, test_rewrite_keeps_background, test_remove_and_mark,
               test_rotated_page_edit, test_portable_swap, test_setup_script, test_release_check):
         try:
             t()

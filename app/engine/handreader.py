@@ -183,9 +183,9 @@ class HandReader:
         H, W = dark.shape
         # borders: columns dark almost top to bottom, rows dark across most of the width
         from .writers import rules
-        cols = dark.mean(axis=0) > 0.7
+        cols = dark.mean(axis=0) > 0.9            # a border crosses the whole line; an "l" does not
         rows = dark.mean(axis=1) > 0.5
-        line = rules(dark, max(H // 4, 3), chain=3, fill=0.75) | cols[None, :] | rows[:, None]
+        line = rules(dark, max(H // 10, 2), chain=9, fill=0.75) | cols[None, :] | rows[:, None]
         for k in (1, 2):                                        # their anti-aliased edges too
             line[:, k:] |= line[:, :-k] & cols[None, :-k]
             line[:, :-k] |= line[:, k:] & cols[None, k:]

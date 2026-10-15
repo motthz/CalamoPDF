@@ -330,6 +330,63 @@ class Session:
         c = np.median(light if len(light) else edge, axis=0) / 255.0
         return tuple(float(v) for v in c)
 
+    def _cover_letters(self, page, rect, zoom=3.0):
+        """Remove only the letters inside rect: the paper under them is rebuilt from what
+        surrounds them, so a highlighter, the borders of a table, the rules of a notebook
+        and the shading of a scan go on as before. False when there were no letters."""
+        rect = fitz.Rect(rect) & page.rect
+        if rect.is_empty:
+            return False
+        m = max(rect.height * 1.5, 14)
+        ctx = fitz.Rect(rect.x0 - 2 * m, rect.y0 - m, rect.x1 + 2 * m, rect.y1 + m) & page.rect
+        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=ctx, alpha=False)
+        rgb = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3]
+        # the rendered pixels start at a whole pixel: work from where they really are
+        ox, oy = pix.x / zoom, pix.y / zoom
+        x0, y0 = int((rect.x0 - ox) * zoom), int((rect.y0 - oy) * zoom)
+        x1, y1 = int(round((rect.x1 - ox) * zoom)), int(round((rect.y1 - oy) * zoom))
+        x0, y0 = max(x0, 0), max(y0, 0)
+        x1, y1 = min(x1, rgb.shape[1]), min(y1, rgb.shape[0])
+        if x1 - x0 < 2 or y1 - y0 < 2:
+            return False
+        from .letters import erase_letters
+        patch, n, (x0, y0, x1, y1) = erase_letters(rgb, (x0, y0, x1, y1), (rect.height / 1.28) * zoom)
+        if patch is None:
+            return False
+        from PIL import Image
+        buf = io.BytesIO()
+        img = Image.fromarray(patch, "RGB")
+        # twice the pixels: drawing it back on the page then hardly softens anything
+        img.resize((img.width * 2, img.height * 2), Image.BICUBIC).save(buf, "PNG")
+        target = fitz.Rect(ox + x0 / zoom, oy + y0 / zoom, ox + x1 / zoom, oy + y1 / zoom)
+        page.insert_image(_unrot(page, target), stream=buf.getvalue(), rotate=page.rotation, overlay=True)
+        return True
+
+    def _cell_right(self, page, r, zoom=2.0):
+        """Right border of the table cell holding the line r (displayed coordinates), or
+        None: rewritten text must stay inside its cell."""
+        h = r.height
+        ctx = fitz.Rect(r.x0, r.y0 - h, page.rect.x1, r.y1 + h) & page.rect
+        if ctx.is_empty:
+            return None
+        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=ctx, alpha=False)
+        rgb = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3]
+        from .letters import cell_right
+        row = (int((r.y0 - ctx.y0) * zoom), int((r.y1 - ctx.y0) * zoom))
+        x = cell_right(rgb, row, int((r.x1 - ctx.x0) * zoom) - 2, h / 1.28 * zoom)
+        return ctx.x0 + x / zoom if x is not None else None
+
+    def _border_below(self, page, x0, x1, y0, y1, zoom=2.0):
+        """A horizontal table border between y0 and y1 (displayed coordinates)."""
+        r = fitz.Rect(x0, y0, x1, y1) & page.rect
+        if r.is_empty or r.width < 8:
+            return False
+        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=r, alpha=False)
+        rgb = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3]
+        from .letters import analyse
+        letters, vert, horiz, ink = analyse(rgb, (y1 - y0) / 3 * zoom)
+        return bool(horiz.any())
+
     def _cover(self, page, rect, zoom=3.0):
         """Hide what is inside rect (displayed coordinates) by rebuilding the paper around
         it: every row continues the colour found left and right of the area, so ruled
@@ -1221,11 +1278,11 @@ class Session:
             return {"img": "data:image/png;base64," + base64.b64encode(png).decode(),
                     "coverage": round(lib.coverage(text), 2), "style": lib.sid, "kind": lib.kind}
 
-    def _place(self, page, lib, text, x, baseline, xh, color):
+    def _place(self, page, lib, text, x, baseline, xh, color, right=None):
         """Draw text composed with a writing, sitting on `baseline` with x-height `xh`;
         scanned print also gets an invisible text layer, so it can still be searched and
         copied like the original OCR'd scan."""
-        res = lib.render(text, xh, color, max_width_pt=page.rect.x1 - 18 - x)
+        res = lib.render(text, xh, color, max_width_pt=(right if right else page.rect.x1 - 18) - x)
         if not res:
             return None
         top = baseline + res["top_offset_pt"]
@@ -1288,12 +1345,14 @@ class Session:
         g = a.mean(axis=2)
         return float((g < np.percentile(g, 90) - 60).mean()) < 0.004
 
-    def _place_lines(self, index, page, lib, text, x, base, xh, color, skip=()):
+    def _place_lines(self, index, page, lib, text, x, base, xh, color, skip=(), right=None):
         """Write a (multi-line) text; returns [(text, res, baseline)] for each written line.
         The following lines go below only where the page is free: otherwise the rest of the
         text is squeezed into the last line that fits, never written over other writing."""
         pitch = self._line_pitch(index, lib, xh)
-        right = page.rect.x1 - 24
+        # inside a table the text stays in its cell, elsewhere within the page margin
+        in_cell = bool(right)
+        right = min(page.rect.x1 - 24, right - 3) if right else page.rect.x1 - 24
         lines = self._wrap(lib, text, xh, right - x)
         rows = 1
         while rows < len(lines):
@@ -1301,6 +1360,8 @@ class Session:
             rect = fitz.Rect(x, b - xh * 1.9, right, b + xh * 0.9)
             if rect.y1 > page.rect.y1 or not self._free(page, index, rect, skip):
                 break
+            if in_cell and self._border_below(page, x, right, base, b + xh * 0.9):
+                break                                  # the next line would leave the cell
             rows += 1
         if rows < len(lines):
             lines = lines[:rows - 1] + [" ".join(t for t in lines[rows - 1:] if t)]
@@ -1309,7 +1370,7 @@ class Session:
             if not t.strip():
                 continue
             b = base + k * pitch
-            res = self._place(page, lib, t, x, b, xh, color)
+            res = self._place(page, lib, t, x, b, xh, color, right)
             if res:
                 done.append((t, res, b))
         return done
@@ -1328,12 +1389,15 @@ class Session:
                 base, xh = HW.measure_line(page, r, line["text"])
             self._checkpoint(index)
             cover = fitz.Rect(r.x0 - 2, r.y0 - h * 0.14, r.x1 + 2, r.y1 + h * 0.14) & page.rect
-            self._cover(page, cover)
+            right = self._cell_right(page, r)
+            if not self._cover_letters(page, cover):
+                self._cover(page, cover)
             written = []
             if text.strip():
                 # the line is rewritten with the letters of ITS writing only (never mixed)
                 ink_color = _rgb(color) if color else lib.ink_color()
-                written = self._place_lines(index, page, lib, text, r.x0, base, xh, ink_color, skip=(line_id,))
+                written = self._place_lines(index, page, lib, text, r.x0, base, xh, ink_color, skip=(line_id,),
+                                            right=right)
             if written:
                 text, res, _ = written[0]
                 line["bbox"] = [r.x0, r.y0, max(r.x0 + res["width_pt"], r.x0 + 4), r.y1]
