@@ -25,7 +25,7 @@ from engine.ocr import available_languages  # noqa: E402
 from engine.storage import load_json, save_json  # noqa: E402
 import updater  # noqa: E402
 
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 
 _user32 = ctypes.windll.user32
 _user32.FindWindowW.restype = wintypes.HWND
@@ -383,6 +383,14 @@ class Api:
         gen = self._cancel_gen
         return self._s.analyze(index, self._settings.get("ocrLang") or None, reader=self._reader(),
                                cancelled=lambda: gen != self._cancel_gen)
+
+    @safe
+    def remove_ink(self, index, line_id):
+        return self._s.remove_ink(index, line_id)
+
+    @safe
+    def mark_ink(self, index, rect):
+        return self._s.mark_ink(index, rect, self._settings.get("ocrLang") or None, reader=self._reader())
 
     @safe
     def cancel_analysis(self):

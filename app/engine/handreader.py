@@ -14,7 +14,8 @@ import numpy as np
 from .storage import path as data_path
 
 REPO = "Xenova/trocr-small-handwritten"
-MIRRORS = [f"https://huggingface.co/{REPO}/resolve/main/", f"https://hf-mirror.com/{REPO}/resolve/main/"]
+MIRRORS = [f"https://huggingface.co/{REPO}/resolve/main/", f"https://hf-mirror.com/{REPO}/resolve/main/",
+           f"https://www.modelscope.cn/models/{REPO}/resolve/master/"]
 # (local name, candidates in the repository: the smaller quantized ones first)
 FILES = [("config.json", ["config.json"]),
          ("generation_config.json", ["generation_config.json"]),
@@ -158,16 +159,66 @@ class HandReader:
 
     @staticmethod
     def clean(rgb):
-        """The model was trained on dark ink on white paper: whatever the pen colour and the
-        paper tone, the line becomes black ink on white, with full contrast."""
+        """The model was trained on single lines of dark ink on white paper: whatever the
+        pen colour and the paper tone, the line becomes black ink on white, with full
+        contrast; table borders and pieces of the lines above and below are removed."""
+        from PIL import Image
         a = rgb[:, :, :3].astype(np.float32)
         gray = a.min(axis=2) * 0.5 + a.mean(axis=2) * 0.5      # coloured ink counts as dark
+        # the paper's own brightness everywhere (shadows, creases, grain): divide it out
+        H0, W0 = gray.shape
+        k = max(min(H0, W0) // 3, 4)
+        hb, wb = max(H0 // k, 1), max(W0 // k, 1)
+        small = gray[:hb * k, :wb * k].reshape(hb, k, wb, k).max(axis=(1, 3)) if H0 >= k and W0 >= k else None
+        if small is not None:
+            bg = np.asarray(Image.fromarray(small.astype(np.uint8)).resize((W0, H0), Image.BILINEAR), np.float32)
+            gray = np.clip(gray / np.maximum(bg, 1) * 255, 0, 255)
         paper = float(np.percentile(gray, 90))
         ink = float(np.percentile(gray, 1))
         if paper - ink < 20:
             return np.full(a.shape[:2] + (3,), 255, np.uint8)
         x = np.clip((gray - ink) / (paper - ink), 0, 1)
         x = np.where(x > 0.85, 1.0, x)                           # paper grain and shading go white
+        dark = x < 0.5
+        H, W = dark.shape
+        # borders: columns dark almost top to bottom, rows dark across most of the width
+        from .writers import rules
+        cols = dark.mean(axis=0) > 0.7
+        rows = dark.mean(axis=1) > 0.5
+        line = rules(dark, max(H // 4, 3), chain=3, fill=0.75) | cols[None, :] | rows[:, None]
+        for k in (1, 2):                                        # their anti-aliased edges too
+            line[:, k:] |= line[:, :-k] & cols[None, :-k]
+            line[:, :-k] |= line[:, k:] & cols[None, k:]
+        x[line] = 1.0
+        dark &= ~line
+        # keep the band of text in the middle: what the crop caught of the lines around goes
+        prof = dark.sum(axis=1)
+        if prof.any():
+            on = prof > max(prof.max() * 0.04, 0)
+            bands, start = [], None
+            for i, v in enumerate(on):
+                if v and start is None:
+                    start = i
+                elif not v and start is not None:
+                    bands.append((start, i))
+                    start = None
+            if start is not None:
+                bands.append((start, H))
+            if len(bands) > 1:
+                main = max(bands, key=lambda b: prof[b[0]:b[1]].sum())
+                keep = np.zeros(H, bool)
+                keep[main[0]:main[1]] = True
+                for b in bands:     # accents and dots just above, tails just below, stay
+                    if b != main and min(abs(b[1] - main[0]), abs(b[0] - main[1])) < (main[1] - main[0]) * 0.35 \
+                            and prof[b[0]:b[1]].sum() < prof[main[0]:main[1]].sum() * 0.25:
+                        keep[b[0]:b[1]] = True
+                x[~keep] = 1.0
+                dark[~keep] = False
+        # crop to the ink, with a margin like the training lines
+        ys, xs = np.nonzero(dark)
+        if len(xs):
+            m = max(int((ys.max() - ys.min()) * 0.15), 3)
+            x = x[max(ys.min() - m, 0):ys.max() + m + 1, max(xs.min() - m, 0):xs.max() + m + 1]
         g = (x * 255).astype(np.uint8)
         return np.repeat(g[:, :, None], 3, axis=2)
 

@@ -215,6 +215,95 @@ def _components(mask):
     return list(merged.values())
 
 
+def rules(mask, band, chain=3, fill=0.7, chain_h=None):
+    """Pixels of long thin lines: table borders, underlines, ruled paper, also drawn by
+    hand or slanting in a photo. The page is cut into strips `band` px long; inside a
+    strip a border fills (almost) a whole column (or row); it is a border when that
+    continues, give or take a couple of pixels, over `chain` strips in a row - longer
+    than any stroke of a letter."""
+    out = np.zeros_like(mask)
+    for axis in (0, 1):                      # 0: vertical lines, 1: horizontal lines
+        m = mask if axis == 0 else mask.T
+        o = out if axis == 0 else out.T
+        need = chain if axis == 0 or chain_h is None else chain_h
+        H, W = m.shape
+        nb = H // band
+        if nb < (chain if axis == 0 or chain_h is None else chain_h) or W == 0:
+            continue
+        thick = m.copy()                      # a slanting line spreads over 2 columns
+        thick[:, 1:] |= m[:, :-1]
+        thick[:, :-1] |= m[:, 1:]
+        strips = thick[:nb * band].reshape(nb, band, W).mean(axis=1) >= fill
+        near = strips.copy()                  # allow a drift of 2 px between strips
+        for k in (1, 2):
+            near[:, k:] |= strips[:, :-k]
+            near[:, :-k] |= strips[:, k:]
+        # length of the chain of strips each (strip, column) belongs to
+        run = np.zeros_like(near, dtype=np.int32)
+        for i in range(nb):
+            run[i] = np.where(near[i], (run[i - 1] if i else 0) + 1, 0)
+        total = run.copy()
+        for i in range(nb - 2, -1, -1):
+            total[i] = np.where(near[i] & near[i + 1], total[i + 1], total[i])
+        hit = strips & (total >= need)
+        for i in np.nonzero(hit.any(axis=1))[0]:
+            cols = np.nonzero(hit[i])[0]
+            for c in cols:
+                o[i * band:(i + 1) * band, max(c - 1, 0):c + 2] |= m[i * band:(i + 1) * band, max(c - 1, 0):c + 2]
+    return out
+
+
+def split_cols(mask, border, box):
+    """A region that leaks through a gap of a table border is cut where the border runs."""
+    x0, y0, x1, y1 = box
+    h = y1 - y0
+    b = border[y0:y1, x0:x1]
+    wide = b.copy()                           # a wavy border: look 2 px around each column
+    for k in (1, 2):
+        wide[:, k:] |= b[:, :-k]
+        wide[:, :-k] |= b[:, k:]
+    cuts = np.nonzero(wide.sum(axis=0) >= 0.3 * h)[0]
+    if not len(cuts):
+        return [box]
+    out, start = [], 0
+    for c in list(cuts) + [x1 - x0]:
+        if c - start >= 3:
+            sub = mask[y0:y1, x0 + start:x0 + c]
+            ys, xs = np.nonzero(sub)
+            if len(xs):
+                out.append((x0 + start + int(xs.min()), y0 + int(ys.min()),
+                            x0 + start + int(xs.max()) + 1, y0 + int(ys.max()) + 1))
+        start = c + 1
+    return out or [box]
+
+
+def split_rows(mask, box, line_h):
+    """A region holding several lines of text (a table cell, a paragraph) cut into lines
+    at the valleys of its row profile; lines whose letters touch (descenders, ascenders)
+    are cut at the thinnest row. line_h = usual height of one line, in px."""
+    x0, y0, x1, y1 = box
+    h = y1 - y0
+    if h < 1.6 * line_h:
+        return [box]
+    prof = mask[y0:y1, x0:x1].sum(axis=1).astype(np.float64)
+    k = max(int(line_h * 0.15), 1)
+    smooth = np.convolve(prof, np.ones(2 * k + 1) / (2 * k + 1), mode="same")
+    lo, hi = int(line_h * 0.6), int(h - line_h * 0.6)
+    if hi <= lo:
+        return [box]
+    cut = lo + int(np.argmin(smooth[lo:hi]))
+    body = np.median(smooth[smooth > smooth.max() * 0.1]) if (smooth > 0).any() else 0
+    if smooth[cut] > body * 0.45:
+        return [box]                                # no clear gap: one tall line
+    out = []
+    for a, b in ((y0, y0 + cut), (y0 + cut, y1)):
+        ys, xs = np.nonzero(mask[a:b, x0:x1])
+        if len(xs):
+            out += split_rows(mask, (x0 + int(xs.min()), a + int(ys.min()), x0 + int(xs.max()) + 1,
+                                     a + int(ys.max()) + 1), line_h)
+    return out or [box]
+
+
 def unread_lines(rgb, zoom, known_rects):
     """Text-like ink regions (page points) not covered by any known rect.
     rgb: page image rendered at `zoom` px per point."""
@@ -227,29 +316,35 @@ def unread_lines(rgb, zoom, known_rects):
         x0, y0 = int(max(r[0] * zoom - h * 0.6, 0)), int(max(r[1] * zoom - h * 0.3, 0))
         x1, y1 = int(min(r[2] * zoom + h * 0.6, W)), int(min(r[3] * zoom + h * 0.3, H))
         mask[y0:y1, x0:x1] = False
-    # remove long rules (table lines, underlines)
-    for axis in (0, 1):
-        runs_len = int(60 * zoom)
-        m = mask if axis == 1 else mask.T
-        for i in range(m.shape[0]):
-            row = m[i]
-            if row.sum() < runs_len:
-                continue
-            d = np.diff(np.concatenate(([0], row.view(np.int8), [0])))
-            for s, e in zip(np.where(d == 1)[0], np.where(d == -1)[0]):
-                if e - s >= runs_len:
-                    row[s:e] = False
-    # join letters into words and lines: smear horizontally
+    # remove the rules of tables and underlines (also when a photo makes them slant)
+    border = rules(mask, max(int(10 * zoom), 4), chain=3, chain_h=6)
+    mask &= ~border
+    # join letters into words and lines: smear horizontally, never across a border
     gap = max(int(6 * zoom), 2)
     cs = np.cumsum(np.pad(mask.astype(np.int32), ((0, 0), (gap, gap))), axis=1)
     smeared = (cs[:, 2 * gap:] - cs[:, :-2 * gap]) > 0
     smeared = smeared[:, :W] if smeared.shape[1] >= W else np.pad(smeared, ((0, 0), (0, W - smeared.shape[1])))
+    wall = border.copy()
+    wall[:, 1:] |= border[:, :-1]
+    wall[:, :-1] |= border[:, 1:]
+    smeared &= ~wall
     out = []
+    parts = []
     for x0, y0, x1, y1, n in _components(smeared):
+        parts += split_cols(mask, border, (x0, y0, x1, y1))
+    # the usual height of a line on this page: the regions holding a single word or line
+    hs = sorted(b[3] - b[1] for b in parts if b[3] - b[1] >= 5 * zoom and b[2] - b[0] >= 12 * zoom)
+    line_h = float(np.percentile(hs, 40)) if hs else 14 * zoom
+    boxes = []
+    for part in parts:
+        boxes += split_rows(mask, part, line_h)
+    for x0, y0, x1, y1 in boxes:
         w, h = (x1 - x0) / zoom, (y1 - y0) / zoom
         ink = mask[y0:y1, x0:x1].sum()
         if h < 5 or h > 70 or w < 12 or w < h * 1.2:
             continue                                   # dots, noise, pictures, vertical strokes
+        if (y1 - y0) < 0.55 * line_h and (x1 - x0) > 3 * (y1 - y0):
+            continue                                   # a dash, a piece of a border or underline
         density = ink / max((x1 - x0) * (y1 - y0), 1)
         if density < 0.03 or density > 0.6:
             continue                                   # too faint, or a filled shape

@@ -336,6 +336,76 @@ def test_skewed_scan():
         check(f"skewed scan {skew} deg: lines read", found >= 4, f"{found} righe lette bene su {len(truth)}")
 
 
+def test_table_form():
+    """A handwritten form with drawn borders (slightly crooked, like a photo): every cell
+    must be read on its own, never glued to the next cell or to the border."""
+    import io
+    import numpy as np
+    import pymupdf as fitz
+    from PIL import Image, ImageDraw, ImageFilter, ImageFont
+    from engine.document import Session
+    from engine.handreader import READER
+    fonts = os.path.join(os.environ["WINDIR"], "Fonts")
+    font = ImageFont.truetype(os.path.join(fonts, "Inkfree.ttf"), 46)
+    rows = [("1", "Setup ambiente", "Alta", "20/12/2025", "Da fare"),
+            ("2", "Database", "Media", "30/12/2025", "In corso"),
+            ("3", "Deploy su server", "Bassa", "05/02/2026", "Da fare")]
+    W, H = 1654, 1100
+    img = Image.new("RGB", (W, H), (244, 243, 238))
+    d = ImageDraw.Draw(img)
+    xs, y0, rh = [80, 200, 760, 1000, 1330, 1580], 150, 150
+    ink = (30, 40, 150)
+    for k in range(len(rows) + 1):              # rows of the grid, a little crooked
+        d.line([(xs[0], y0 + k * rh), (xs[-1], y0 + k * rh + 9)], fill=ink, width=3)
+    for x in xs:
+        d.line([(x, y0), (x + 6, y0 + len(rows) * rh)], fill=ink, width=3)
+    for r, row in enumerate(rows):
+        for c, text in enumerate(row):
+            d.text((xs[c] + 25, y0 + r * rh + 45), text, font=font, fill=ink)
+    img = img.filter(ImageFilter.GaussianBlur(0.6))
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=85)
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=396)
+    page.insert_image(page.rect, stream=buf.getvalue())
+    path = os.path.join(tempfile.mkdtemp(), "table.pdf")
+    doc.save(path)
+    s = Session()
+    s.open(path)
+    r = s.analyze(0, reader=READER if READER.installed() else None)
+    texts = [l["text"] for l in r["ink"]]
+    print("   tabella:", texts)
+    cells = [c for row in rows for c in row if len(c) > 2]
+    good = sum(1 for c in cells if any(_cer(t, c) < 0.25 for t in texts))
+    check("table: cells read one by one", good >= len(cells) * 0.75, f"{good} di {len(cells)}")
+    glued = [t for t in texts if sum(1 for c in set(cells) if c.lower() in t.lower()) >= 2]
+    check("table: no cells glued together", not glued, str(glued))
+
+
+def test_remove_and_mark():
+    """'Not writing' removes a line for good; outlining missed writing reads it."""
+    from engine.document import Session
+    path, truth = _scan_page(skew=0)
+    s = Session()
+    s.open(path)
+    r = s.analyze(0)
+    target = next(l for l in r["ink"] if l["kind"] == "print")
+    n = len(r["ink"])
+    r = s.remove_ink(0, target["id"])
+    check("remove: line removed", len(r["ink"]) == n - 1)
+    r = s.analyze(0)
+    check("remove: not back after a new reading",
+          not any(abs(l["bbox"][1] - target["bbox"][1]) < 3 and abs(l["bbox"][0] - target["bbox"][0]) < 3 for l in r["ink"]))
+    # outline the area of the first printed line again: it is read and added
+    b = target["bbox"]
+    r = s.mark_ink(0, [b[0] - 4, b[1] - 4, b[2] + 4, b[3] + 4])
+    new = [l for l in r["ink"] if l["id"] in r.get("added", [])]
+    exp = min(truth, key=lambda t: abs(t[2] - b[1]))[1]
+    print("   segnata:", [l["text"] for l in new], "atteso:", exp)
+    check("mark: outlined writing read", bool(new) and _cer(new[0]["text"], exp) < 0.2,
+          new[0]["text"] if new else "nessuna riga")
+
+
 def test_setup_script():
     import updater
     text = updater.build_script({"kind": "setup"}, r"C:\T\CalamoPDF-Setup.exe", True,
@@ -354,7 +424,7 @@ def test_release_check():
 
 
 if __name__ == "__main__":
-    for t in (test_ocr, test_writings, test_skewed_scan, test_handreader, test_reader_in_analysis,
+    for t in (test_ocr, test_writings, test_skewed_scan, test_handreader, test_reader_in_analysis, test_table_form, test_remove_and_mark,
               test_rotated_page_edit, test_portable_swap, test_setup_script, test_release_check):
         try:
             t()
