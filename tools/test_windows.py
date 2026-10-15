@@ -529,6 +529,26 @@ def test_editing():
     check("edit: lighter copy opens", len(fitz.open(light)) == 4, f"{r['before']} -> {r['after']} byte")
     cmp = s.compare_with(src)
     check("edit: compare finds changes", cmp["changed"] >= 1, f"{cmp['changed']} di {cmp['total']}")
+    # drag a block of text
+    b0 = next(b for b in s.blocks(0)["blocks"] if "Mario" in b["text"])
+    r = s.move_block(0, b0["bbox"], 30, 200)
+    b1 = next((b for b in r["blocks"] if "Mario" in b["text"] and abs(b["bbox"][0] - b0["bbox"][0] - 30) < 2 and b["bbox"][1] > b0["bbox"][1] + 150), None)
+    check("drag: text moved with its font", b1 is not None, b1 and str([round(v) for v in b1["bbox"]]))
+    # text written after a save stays readable (saving used to leave stale font references)
+    s.save(os.path.join(tmp, "salvato.pdf"))
+    s.add_text(0, 72, 400, "Scritto dopo il salvataggio", {"family": "Arial", "size": 12})
+    b2 = next((b for b in s.blocks(0)["blocks"] if b["bbox"][1] > 380 and b["bbox"][1] < 420), None)
+    check("save: text written afterwards is readable", b2 is not None and b2["text"] == "Scritto dopo il salvataggio",
+          b2 and b2["text"])
+    # merge and split whole files
+    from engine import files as FILES
+    merged = os.path.join(tmp, "unito.pdf")
+    FILES.merge([{"src": src, "name": "contratto.pdf"}, {"src": other, "name": "allegato.pdf", "pages": "1"}], merged)
+    check("files: merged with one bookmark per file", len(fitz.open(merged)) == 4 and len(fitz.open(merged).get_toc()) == 2)
+    folder = os.path.join(tmp, "parti")
+    os.makedirs(folder)
+    r = FILES.split(merged, "unito", folder, "ranges", "1-2, 3-4")
+    check("files: split by ranges", [len(fitz.open(f)) for f in r["files"]] == [2, 2], str([os.path.basename(f) for f in r["files"]]))
 
 
 def test_setup_script():

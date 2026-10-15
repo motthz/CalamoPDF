@@ -358,10 +358,8 @@ Object.assign(COMMANDS, {
     const ok = await modal("Eliminare le pagine?", `Le pagine ${spec} verranno rimosse. Puoi annullare con Ctrl+Z.`, [["Annulla", false, "ghost"], ["Elimina", true, "primary"]]);
     if (ok) guarded(async () => { S.inkCache = {}; await afterChange(await call("delete_pages", spec)); setCurrent(Math.min(S.current, S.pages.length - 1)); });
   },
-  splitPdf: () => guarded(async () => {
-    const r = await call("split_every", Math.max(1, parseInt($("#splitEvery").value) || 1));
-    if (r) toast(`Creati ${r.files.length} file`, "ok", reveal(r));
-  }, "Divisione del PDF…"),
+  filesTool: () => openFilesModal("merge"),
+  splitCurrent: () => openFilesModal("split", true),
   stampPages: () => guarded(async () => {
     const r = await call("stamp_pages", {
       header: $("#stHeader").value, footer: $("#stFooter").value, align: $("#stAlign").value,
@@ -461,4 +459,155 @@ function flashBox(page, rect) {
   Object.assign(d.style, box(rect, scale(), 4));
   P.overlay.appendChild(d);
   setTimeout(() => d.remove(), 1500);
+}
+
+// ---------------------------------------------------------------- whole PDFs: merge and split
+const FM = { items: [], split: null };
+function openFilesModal(mode, current) {
+  $("#filesModal").hidden = false;
+  if (current && S.doc) FM.split = { path: "@current", name: S.doc.name };
+  else if (!FM.split && S.doc) FM.split = { path: "@current", name: S.doc.name };
+  if (!S.doc && FM.split && FM.split.path === "@current") FM.split = null;
+  $("#mergeAddCurrent").disabled = !S.doc;
+  $(`#filesMode [data-m="${mode}"]`).click();
+  renderMerge(); renderSplitSrc();
+}
+segSwitch($("#filesMode"), "m", m => { $("#mergeBox").hidden = m !== "merge"; $("#splitBox").hidden = m !== "split"; });
+$("#filesClose").onclick = () => { $("#filesModal").hidden = true; };
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+function renderMerge() {
+  const L = $("#mergeList");
+  L.innerHTML = FM.items.length ? FM.items.map((it, k) => `<div class="merge-item" draggable="true" data-k="${k}">
+      <span class="grip">⋮⋮</span><svg><use href="#i-pdf"/></svg>
+      <div class="grow"><b>${esc(it.name)}</b><small>${it.current ? "documento aperto, con le modifiche" : plural(it.pages, "pagina", "pagine")}</small></div>
+      <input class="mpages" placeholder="tutte" value="${esc(it.spec || "")}" title="Pagine da prendere (es. 1-3, 5)" spellcheck="false">
+      <button class="icon-btn" data-a="up" title="Su" ${k ? "" : "disabled"}>↑</button>
+      <button class="icon-btn" data-a="down" title="Giù" ${k < FM.items.length - 1 ? "" : "disabled"}>↓</button>
+      <button class="icon-btn danger" data-a="del" title="Togli"><svg><use href="#i-x"/></svg></button></div>`).join("")
+    : `<div class="empty small">Nessun PDF: premi <b>Aggiungi PDF…</b> e scegline due o più.</div>`;
+  $$(".merge-item", L).forEach(el => {
+    const k = +el.dataset.k;
+    $("input", el).oninput = e => { FM.items[k].spec = e.target.value; };
+    $("input", el).onkeydown = e => e.stopPropagation();
+    $$("[data-a]", el).forEach(b => b.onclick = () => {
+      const a = b.dataset.a;
+      if (a === "del") FM.items.splice(k, 1);
+      else { const j = a === "up" ? k - 1 : k + 1; [FM.items[k], FM.items[j]] = [FM.items[j], FM.items[k]]; }
+      renderMerge();
+    });
+    el.addEventListener("dragstart", e => { FM.drag = k; e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", "m" + k); el.classList.add("dragging"); });
+    el.addEventListener("dragend", () => { FM.drag = null; renderMerge(); });
+    el.addEventListener("dragover", e => { if (FM.drag == null) return; e.preventDefault(); e.stopPropagation();
+      $$(".merge-item", L).forEach(x => x.classList.remove("drop-before", "drop-after"));
+      const r = el.getBoundingClientRect(); el.classList.add(e.clientY > r.top + r.height / 2 ? "drop-after" : "drop-before"); });
+    el.addEventListener("drop", e => {
+      if (FM.drag == null) return;
+      e.preventDefault(); e.stopPropagation();
+      let dst = el.classList.contains("drop-after") ? k + 1 : k;
+      const src = FM.drag; FM.drag = null;
+      if (src < dst) dst -= 1;
+      FM.items.splice(dst, 0, FM.items.splice(src, 1)[0]);
+      renderMerge();
+    });
+  });
+  const pages = FM.items.reduce((n, it) => n + (it.pages || 0), 0);
+  $("#mergeTotal").textContent = FM.items.length ? `${plural(FM.items.length, "file", "file")}${pages ? ", " + plural(pages, "pagina", "pagine") : ""}` : "";
+  $("#mergeGo").disabled = !FM.items.length || (FM.items.length < 2 && !FM.items.some(it => it.spec));
+}
+$("#mergeAdd").onclick = () => guarded(async () => {
+  const list = await call("pick_pdfs", true);
+  list.forEach(f => { if (f.locked) toast(`“${f.name}” è protetto da password: aprilo e salvane una copia senza password.`, "warn"); else FM.items.push({ path: f.path, name: f.name, pages: f.pages }); });
+  renderMerge();
+});
+$("#mergeAddCurrent").onclick = () => {
+  if (!S.doc) return;
+  FM.items.push({ path: "@current", name: S.doc.name, pages: S.doc.pages.length, current: true });
+  renderMerge();
+};
+$("#mergeGo").onclick = async () => {
+  const open = $("#mergeOpen").checked;
+  if (open && !(await confirmDiscard())) return;
+  await guarded(async () => {
+    const r = await call("merge_files", FM.items.map(it => ({ path: it.path, pages: it.spec || "" })), open);
+    if (!r) return;
+    $("#filesModal").hidden = true;
+    FM.items = [];
+    if (r.info) loadDoc(r.info);
+    toast(`Uniti ${plural(r.files, "file", "file")} in “${r.name}” (${plural(r.pages, "pagina", "pagine")})`, "ok", r.info ? null : reveal(r));
+  }, "Unione dei PDF…");
+};
+function renderSplitSrc() {
+  $("#splitName").textContent = FM.split ? FM.split.name + (FM.split.path === "@current" ? " (aperto)" : "") : "Nessun PDF scelto";
+  $("#splitGo").disabled = !FM.split;
+}
+$("#splitPick").onclick = () => guarded(async () => {
+  const [f] = await call("pick_pdfs", false);
+  if (!f) return;
+  if (f.locked) return toast(`“${f.name}” è protetto da password: aprilo e salvane una copia senza password.`, "warn");
+  FM.split = { path: f.path, name: f.name };
+  renderSplitSrc();
+});
+$$("#splitModes input:not([type=radio])").forEach(i => {
+  i.onfocus = () => { i.closest("label").querySelector("input[type=radio]").checked = true; };
+  i.onkeydown = e => e.stopPropagation();
+});
+$("#splitGo").onclick = () => guarded(async () => {
+  const mode = $("#splitModes input[type=radio]:checked").value;
+  const value = { every: +$("#splitN").value || 1, ranges: $("#splitRanges").value, size: +$("#splitMB").value || 10 }[mode] ?? null;
+  const r = await call("split_file", FM.split.path, mode, value);
+  if (!r) return;
+  $("#filesModal").hidden = true;
+  toast(`Creati ${plural(r.files.length, "file", "file")} da ${plural(r.pages, "pagina", "pagine")}`, "ok", { label: "Apri cartella", run: () => call("reveal", r.folder) });
+}, "Divisione del PDF…");
+
+// ---------------------------------------------------------------- drag the text and the writing of a page
+// Press on a block of text or a line of a scan and drag it: on release it is moved there.
+// A click without moving keeps doing what the tool does (edit the text, open the line).
+function startElementDrag(P, e) {
+  if (S.tool !== "edit" && S.tool !== "select") return false;
+  if (e.target.closest(".obj, .editor")) return false;
+  const el = e.target.closest(".blk, .ink");
+  if (!el) return false;
+  const isInk = el.classList.contains("ink");
+  const item = isInk ? (P.data.ink || []).find(l => l.id === +el.dataset.id) : P.data.blocks.find(b => b.id === +el.dataset.id);
+  if (!item || (isInk && item.source === "unread" && !item.text && S.tool === "edit")) return false;
+  const s = scale(), a = pagePoint(P, e), bb = item.bbox;
+  let ghost = null, d = { x: 0, y: 0 };
+  const move = ev => {
+    const b = pagePoint(P, ev);
+    d = { x: b.x - a.x, y: b.y - a.y };
+    if (!ghost) {
+      if (Math.abs(d.x) + Math.abs(d.y) < 5) return;
+      ghost = document.createElement("div");
+      ghost.className = "drag-ghost";
+      const pad = 3;
+      Object.assign(ghost.style, box(bb, s, pad), {
+        backgroundImage: `url("${P.img.src}")`, backgroundSize: `${P.w * s}px ${P.h * s}px`,
+        backgroundPosition: `${-(bb[0] * s - pad)}px ${-(bb[1] * s - pad)}px`,
+      });
+      P.overlay.appendChild(ghost);
+      el.classList.add("drag-src");
+      document.body.classList.add("dragging-el");
+    }
+    ghost.style.transform = `translate(${d.x * s}px, ${d.y * s}px)`;
+  };
+  const up = async () => {
+    window.removeEventListener("mousemove", move);
+    window.removeEventListener("mouseup", up);
+    document.body.classList.remove("dragging-el");
+    if (!ghost) return;
+    S.suppressClick = Date.now();
+    await guarded(async () => {
+      const r = isInk ? await call("move_ink", P.i, item.id, d.x, d.y) : await call("move_block", P.i, item.bbox, d.x, d.y);
+      await afterChange();
+      toast(isInk ? "Scritta spostata (Ctrl+Z per annullare)" : "Testo spostato (Ctrl+Z per annullare)", "ok");
+      return r;
+    }, isInk ? "Spostamento della scritta…" : null);
+    ghost.remove();
+    el.classList.remove("drag-src");
+  };
+  window.addEventListener("mousemove", move);
+  window.addEventListener("mouseup", up);
+  e.preventDefault();
+  return true;
 }

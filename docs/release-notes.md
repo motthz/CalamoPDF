@@ -2,9 +2,18 @@
 
 **Tutti gli strumenti per lavorare sui PDF, oltre alla scrittura a mano.**
 
+**Unisci e dividi PDF interi** (pulsante nella barra o nella schermata iniziale, anche senza documento aperto)
+- **Unisci** più PDF in un nuovo file: li metti in ordine trascinandoli, per ognuno puoi prendere solo alcune pagine ("1-3, 5"), puoi aggiungere il documento aperto con le sue modifiche. Ogni file diventa un segnalibro, e i segnalibri dei file restano.
+- **Dividi** un PDF in più file: ogni N pagine, per intervalli ("1-3, 4-6, 7-"), una pagina per file, un file per capitolo (segnalibri) o in file al massimo di N MB (per le email).
+
+**Prendi e trascina gli elementi della pagina**
+- Con **Modifica** (M) o **Oggetti** (O) premi su un testo e trascinalo: viene spostato con il suo carattere, la sua dimensione e il suo colore, e resta modificabile e cercabile. Un clic senza trascinare continua a modificarlo.
+- Lo stesso vale per le **scritte delle scansioni** (a mano o stampate, lette da Calamo): si spostano solo le lettere; la carta, l'evidenziatore o la tabella sotto restano dove sono, e al loro posto la carta viene ricostruita.
+- Firme, immagini (anche quelle già presenti nel PDF), note e forme si trascinano con **Oggetti**.
+
 **Pagine**
 - **Riordina** trascinando le miniature a sinistra.
-- **Unisci** altri PDF dopo la pagina corrente, **duplica** una pagina, **estrai** pagine in un nuovo PDF (es. "1-3, 5"), **elimina** più pagine insieme e **dividi** il documento in file da N pagine (scheda *Pagina*).
+- **Inserisci** altri PDF dopo la pagina corrente, **duplica** una pagina, **estrai** pagine in un nuovo PDF (es. "1-3, 5"), **elimina** più pagine insieme (scheda *Pagina*).
 
 **Annota** (tasto A)
 - **Evidenzia, sottolinea e barra** trascinando sul testo: il segno segue le righe, anche sulla scrittura a mano letta da Calamo e sulle scansioni.
@@ -25,6 +34,10 @@
 - **Confronta con un'altra versione**: le differenze vengono segnate sulla pagina e il testo aggiunto/tolto elencato pagina per pagina; per le scansioni il confronto è sull'immagine.
 - **Copia leggera** (immagini ricompresse, tre livelli di qualità) e **copia protetta** con password di apertura e limiti a stampa, copia e modifiche.
 - I PDF protetti da password ora si aprono: Calamo chiede la password.
+
+**Correzioni**
+- Il testo scritto o modificato *dopo un salvataggio* poteva risultare illeggibile quando lo si copiava o cercava (a vista era giusto): ora resta sempre corretto.
+- Un evidenziatore giallo molto acceso veniva scambiato per inchiostro, e riscrivendo una scritta evidenziata il giallo spariva: ora resta.
 
 ## Calamo PDF Studio 1.3.2
 

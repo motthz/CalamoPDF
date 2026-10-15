@@ -439,10 +439,12 @@ function bindOverlay(P) {
     if (e.button !== 0 || e.target.closest(".editor")) return;
     if (S.tool === "erase") return startErase(P, e);
     if (S.tool === "mark") return startRect(P, e, rect => markInk(P, rect));
+    if (startElementDrag(P, e)) return;
     if (toolMouseDown(P, e)) return;
   });
   ov.addEventListener("click", e => {
     if (e.target.closest(".editor")) return;
+    if (S.suppressClick && Date.now() - S.suppressClick < 500) return;     // the end of a drag
     if (S.editing) { applyEditor(); return; }
     if (S.pop) { closePop(); return; }
     setCurrent(P.i);
@@ -1539,6 +1541,7 @@ document.addEventListener("keydown", e => {
     return;
   }
   if (e.key === "Escape" && !$("#glyphModal").hidden) { $("#glyphModal").hidden = true; return; }
+  if (e.key === "Escape" && !$("#filesModal").hidden) { $("#filesModal").hidden = true; return; }
   if (typing || !S.doc) return;
   const tools = { n: "view", m: "edit", t: "text", h: "hand", e: "erase", r: "mark", a: "annotate", f: "insert", x: "redact", o: "select" };
   if (tools[k]) setTool(tools[k]);
@@ -1587,7 +1590,7 @@ const TOUR = [
   { icon: "i-pen", title: "Scrivi con la tua calligrafia", keys: ["H"],
     text: "Con lo strumento A mano clicca un punto vuoto della pagina e scrivi, oppure clicca una scritta esistente per riscriverla: il testo viene composto con le lettere della pagina, nello stesso inchiostro. Poi salva o esporta in Word ed Excel." },
   { icon: "i-marker", title: "Annota, firma, oscura", keys: ["A", "F", "X", "O"],
-    text: "Annota (A) per evidenziare, sottolineare, lasciare note e forme; Firma (F) per mettere la tua firma o un'immagine; Oscura (X) per eliminare per sempre dati riservati; Oggetti (O) per spostarli e ridimensionarli. Trascina le miniature per riordinare le pagine; nella scheda Documento trovi numeri di pagina, filigrana, confronto e protezione." },
+    text: "Annota (A) per evidenziare, sottolineare, lasciare note e forme; Firma (F) per mettere la tua firma o un'immagine; Oscura (X) per eliminare per sempre dati riservati. Con Modifica o Oggetti (O) prendi e trascina testi, scritte, firme e immagini. Il pulsante con i due fogli unisce o divide PDF interi; trascina le miniature per riordinare le pagine." },
   { icon: "i-download", title: "Sempre aggiornato",
     text: "Quando su GitHub esce una nuova versione, Calamo la scarica da solo e la installa alla chiusura. Puoi disattivarlo nelle Impostazioni." },
 ];

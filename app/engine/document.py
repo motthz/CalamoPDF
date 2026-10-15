@@ -200,6 +200,7 @@ class Session(EditingMixin):
                 if not doc.authenticate(password):
                     raise RuntimeError("PASSWORD_WRONG")
             self.doc, self.path = doc, path
+            self._password = password
             self.dirty = False
             self.undo_stack, self.redo_stack = [], []
             self.ink, self.page_versions, self.hands = {}, {}, {}
@@ -236,9 +237,22 @@ class Session(EditingMixin):
             tmp = target + ".calamo-tmp"
             self.doc.save(tmp, garbage=3, deflate=True, clean=False)
             os.replace(tmp, target)
+            # saving compacts the document in memory and renumbers its objects; PyMuPDF's
+            # record of the fonts already written then points at the wrong objects, and text
+            # written after the save would be unreadable when copied or searched. Go on from
+            # the saved file instead.
+            self._reload(target)
             self.path = target
             self.dirty = False
             return self.info()
+
+    def _reload(self, path):
+        with open(path, "rb") as f:
+            doc = fitz.open(stream=f.read(), filetype="pdf")
+        if doc.needs_pass and not doc.authenticate(getattr(self, "_password", None) or ""):
+            return                                  # keep working on the document in memory
+        self.doc = doc
+        self.resolver = F.FontResolver(doc)
 
     # ------------------------------------------------------------------ undo
     def _snapshot(self, page=None):

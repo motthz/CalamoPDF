@@ -104,6 +104,10 @@ def clean_signature(img):
     return Image.fromarray(rgba, "RGBA")
 
 
+def _shown_rect(page, r):
+    return fitz.Rect(r) * page.rotation_matrix
+
+
 def _png(img):
     buf = io.BytesIO()
     img.save(buf, "PNG")
@@ -346,6 +350,120 @@ class EditingMixin:
             a.update()
             self._touch(index)
             return {"objects": self.objects(index)}
+
+    # ================================================================== dragging page content
+    def move_block(self, index, bbox, dx, dy):
+        """Drag a block of digital text: every piece is written again, with its own font,
+        size and colour, dx/dy further on (displayed coordinates); the original is removed."""
+        from .document import REDACT_KW, _to_text, _write_upright
+        with self.lock:
+            page = self.doc[index]
+            b, lines = self._raw_block(page, bbox)
+            if not lines:
+                raise RuntimeError("Questo testo non si può spostare (è ruotato).")
+            old = fitz.Rect(_shown_rect(page, b["bbox"]))
+            R = page.rect
+            dx = max(min(float(dx), R.x1 - old.x1), R.x0 - old.x0)
+            dy = max(min(float(dy), R.y1 - old.y1), R.y0 - old.y0)
+            if abs(dx) < 0.5 and abs(dy) < 0.5:
+                return self.blocks(index)
+            self._checkpoint(index)
+            pieces = []
+            for l in lines:
+                for sp in l["spans"]:
+                    if sp["text"].strip():
+                        pieces.append(sp)
+            for l in lines:
+                page.add_redact_annot(_to_text(page, self._shrink(l["bbox"])))
+            page.apply_redactions(**REDACT_KW)
+            tws = []
+            for sp in pieces:
+                font = self._font_for(page, sp, sp["text"], {})
+                color = tuple(((sp["color"] >> k) & 255) / 255 for k in (16, 8, 0))
+                tw = fitz.TextWriter(page.rect, color=color)
+                tw.append((sp["origin"][0] + dx, sp["origin"][1] + dy), sp["text"], font=font, fontsize=sp["size"])
+                tws.append(tw)
+            for tw in tws:
+                _write_upright(page, tw)
+            self._touch(index)
+            res = self.blocks(index)
+            res["moved"] = [old.x0 + dx, old.y0 + dy, old.x1 + dx, old.y1 + dy]
+            return res
+
+    def move_ink(self, index, line_id, dx, dy):
+        """Drag a line of a scan (handwriting or print read by Calamo): only the ink is
+        lifted - the paper, a highlighter or a table under it stay - and put down dx/dy
+        further on; where it was, the paper is rebuilt."""
+        from .document import _image_upright
+        with self.lock:
+            page = self.doc[index]
+            lines = self.ink.get(index, [])
+            if not (0 <= int(line_id) < len(lines)):
+                raise RuntimeError("Riga non trovata.")
+            line = lines[int(line_id)]
+            box = fitz.Rect(line["bbox"])
+            R = page.rect
+            dx = max(min(float(dx), R.x1 - box.x1), R.x0 - box.x0)
+            dy = max(min(float(dy), R.y1 - box.y1), R.y0 - box.y0)
+            if abs(dx) < 0.5 and abs(dy) < 0.5:
+                return self.blocks(index)
+            png, area = self._lift_ink(page, box)
+            if png is None:
+                raise RuntimeError("Non trovo inchiostro in questa riga.")
+            self._checkpoint(index)
+            if not self._cover_letters(page, box):
+                self._cover(page, box)
+            _image_upright(page, fitz.Rect(area.x0 + dx, area.y0 + dy, area.x1 + dx, area.y1 + dy), png)
+            line["bbox"] = [box.x0 + dx, box.y0 + dy, box.x1 + dx, box.y1 + dy]
+            for w in line.get("words") or []:
+                if w.get("bbox"):
+                    x0, y0, x1, y1 = w["bbox"]
+                    w["bbox"] = [x0 + dx, y0 + dy, x1 + dx, y1 + dy]
+            self._touch(index)
+            res = self.blocks(index)
+            res["moved"] = line["bbox"]
+            return res
+
+    def _lift_ink(self, page, box, zoom=3.0):
+        """The ink of the letters in box as a transparent PNG (and the area it covers).
+        The paper under the letters is rebuilt the same way the eraser does (a highlighter,
+        a table, ruled lines go on); each pixel's opacity is how much darker than that
+        rebuilt paper it is, its colour the ink's. Borders and lines stay on the page."""
+        from PIL import Image
+        from .letters import erase_letters, _gray
+        m = max(box.height * 1.5, 14)
+        ctx = fitz.Rect(box.x0 - 2 * m, box.y0 - m, box.x1 + 2 * m, box.y1 + m) & page.rect
+        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=ctx, alpha=False)
+        rgb = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3]
+        ox, oy = pix.x / zoom, pix.y / zoom
+        x0, y0 = max(int((box.x0 - ox) * zoom), 0), max(int((box.y0 - oy) * zoom), 0)
+        x1 = min(int(round((box.x1 - ox) * zoom)), rgb.shape[1])
+        y1 = min(int(round((box.y1 - oy) * zoom)), rgb.shape[0])
+        if x1 - x0 < 2 or y1 - y0 < 2:
+            return None, box
+        patch, n, (x0, y0, x1, y1) = erase_letters(rgb, (x0, y0, x1, y1), max(box.height / 1.28, 9.0) * zoom)
+        if patch is None or not n:
+            return None, box
+        orig = rgb[y0:y1, x0:x1].astype(np.float32)
+        bg = patch.astype(np.float32)
+        go, gb = _gray(rgb[y0:y1, x0:x1]), _gray(patch)
+        solid = go < np.percentile(go[gb - go > 20], 30) if (gb - go > 20).any() else go < 0
+        ink = np.median(orig[solid], axis=0) if solid.any() else np.array([20.0, 20.0, 20.0])
+        depth = np.maximum(gb - float(_gray(ink[None, None, :].astype(np.uint8))[0, 0]), 30)
+        alpha = np.clip((gb - go) / depth, 0, 1)
+        alpha[alpha < 0.08] = 0
+        # the colour each pixel has without the paper behind it (the soft edges keep the pen's tone)
+        a = np.maximum(alpha, 1e-3)[..., None]
+        colour = np.clip((orig - (1 - a) * bg) / a, 0, 255)
+        colour = np.where((alpha > 0.35)[..., None], colour, ink[None, None, :])
+        rgba = np.dstack([colour, alpha * 255]).astype(np.uint8)
+        ys, xs = np.nonzero(alpha > 0)
+        if not len(ys):
+            return None, box
+        ya, yb, xa, xb = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
+        img = Image.fromarray(rgba[ya:yb, xa:xb], "RGBA")
+        return _png(img), fitz.Rect(ox + (x0 + xa) / zoom, oy + (y0 + ya) / zoom,
+                                    ox + (x0 + xb) / zoom, oy + (y0 + yb) / zoom)
 
     # ================================================================== pictures
     def insert_picture(self, index, png, x, y, width=None):
@@ -801,8 +919,10 @@ class EditingMixin:
         """A lighter copy: pictures recompressed to a resolution good for screen and print,
         duplicate objects merged, everything compressed."""
         with self.lock:
-            before = len(self.doc.tobytes(garbage=1, deflate=True))
-            d = fitz.open(stream=self.doc.tobytes(garbage=3, deflate=True), filetype="pdf")
+            # never compact the open document itself (see Session.save): work on a copy
+            data = self.doc.tobytes()
+            d = fitz.open(stream=data, filetype="pdf")
+            before = len(fitz.open(stream=data, filetype="pdf").tobytes(garbage=1, deflate=True))
             dpi, q = {"alta": (220, 85), "media": (150, 75), "bassa": (110, 60)}.get(quality, (150, 75))
             try:
                 d.rewrite_images(dpi_threshold=dpi + 30, dpi_target=dpi, quality=q, lossy=True,
@@ -828,7 +948,8 @@ class EditingMixin:
                 perm |= fitz.PDF_PERM_COPY
             if allow_edit:
                 perm |= fitz.PDF_PERM_MODIFY | fitz.PDF_PERM_ANNOTATE | fitz.PDF_PERM_FORM | fitz.PDF_PERM_ASSEMBLE
-            self.doc.save(path, garbage=3, deflate=True, encryption=fitz.PDF_ENCRYPT_AES_256,
+            copy = fitz.open(stream=self.doc.tobytes(), filetype="pdf")       # the open document stays as it is
+            copy.save(path, garbage=3, deflate=True, encryption=fitz.PDF_ENCRYPT_AES_256,
                           owner_pw=owner, user_pw=user_pw or "", permissions=perm)
             return {"path": path}
 

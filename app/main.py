@@ -17,6 +17,7 @@ else:
 sys.path.insert(0, BASE)
 
 from engine import export  # noqa: E402
+from engine import files as FILES  # noqa: E402
 from engine import fonts as F  # noqa: E402
 from engine import handwriting as HW  # noqa: E402
 from engine.handreader import READER  # noqa: E402
@@ -337,12 +338,61 @@ class Api:
         path = self._pick_save(f"{self._base()} - estratto.pdf")
         return self._s.extract_pages(spec, path) if path else None
 
+    # ---------------------------------------------------------------- whole files: merge / split
+    def _current_src(self):
+        if not self._s.doc:
+            raise RuntimeError("Nessun documento aperto.")
+        with self._s.lock:
+            return (os.path.basename(self._s.path or "Documento.pdf"), self._s.doc.tobytes())
+
     @safe
-    def split_every(self, every):
+    def pick_pdfs(self, multiple=True):
+        paths = self._pick("Documenti PDF", ["pdf"], multiple=multiple)
+        if not paths:
+            return []
+        return [FILES.describe(p) for p in (paths if multiple else [paths])]
+
+    @safe
+    def merge_files(self, items, open_after=False):
+        """items: [{path or "@current", pages}] in order -> a new PDF chosen by the user."""
+        srcs = []
+        for it in items:
+            if it.get("path") == "@current":
+                name, data = self._current_src()
+                srcs.append({"src": (name, data), "name": name, "pages": it.get("pages", "")})
+            else:
+                srcs.append({"src": it["path"], "name": os.path.basename(it["path"]), "pages": it.get("pages", "")})
+        if not srcs:
+            raise RuntimeError("Aggiungi almeno un PDF da unire.")
+        path = self._pick_save("PDF unito.pdf")
+        if not path:
+            return None
+        res = FILES.merge(srcs, path)
+        if open_after:
+            res["info"] = self._open(path)
+        return res
+
+    @safe
+    def split_file(self, source, mode, value=None):
+        """source: a path or "@current"; the files go to a folder chosen by the user."""
+        if source == "@current":
+            src = self._current_src()
+            base = os.path.splitext(src[0])[0]
+        else:
+            src, base = source, os.path.splitext(os.path.basename(source))[0]
         res = self._window.create_file_dialog(_dialog_kind("FOLDER"))
         if not res:
             return None
-        return self._s.split_every(every, res[0] if isinstance(res, (list, tuple)) else res, self._base())
+        folder = res[0] if isinstance(res, (list, tuple)) else res
+        return FILES.split(src, base, folder, mode, value)
+
+    @safe
+    def move_block(self, index, bbox, dx, dy):
+        return self._s.move_block(index, bbox, dx, dy)
+
+    @safe
+    def move_ink(self, index, line_id, dx, dy):
+        return self._s.move_ink(index, line_id, dx, dy)
 
     @safe
     def delete_pages(self, spec):

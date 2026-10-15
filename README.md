@@ -24,7 +24,9 @@
 | 👥 **Più scritture sullo stesso foglio** | Calamo separa le righe di persone diverse (colore dell'inchiostro, spessore del tratto, inclinazione, dimensione) e i caratteri stampati: ogni riga viene riscritta solo con le lettere della sua scrittura, mai mescolate. Una scrittura si può rinominare, *ricordare* con un nome e usare su altre pagine o documenti quando lo scegli tu. |
 | 🖨️ **Stampato identico alla scansione** | Lo stampato riscritto usa le lettere ritagliate dalla scansione stessa, con la stessa spaziatura, linea di base e dimensione; le lettere mancanti usano il font di sistema più simile, con lo stesso spessore e la stessa sfocatura. Resta cercabile. |
 | 🔎 **Lettura più completa** | Una seconda lettura con contrasto migliorato recupera la scrittura chiara (matita, penne scariche, ombre delle foto); l'inchiostro che resta illeggibile viene segnalato in arancione per scriverne la lettura. |
-| 📑 **Pagine** | Riordina trascinando le miniature, unisci altri PDF, duplica, estrai pagine in un nuovo file, dividi ogni N pagine. |
+| 📚 **Unisci e dividi PDF** | Unisci più PDF interi (anche solo alcune pagine di ciascuno) in un nuovo file con un segnalibro per file; dividi un PDF ogni N pagine, per intervalli, una pagina per file, per capitoli o per dimensione. |
+| ✋ **Prendi e trascina** | Trascina testi (con il loro carattere), scritte delle scansioni (solo le lettere, lo sfondo resta), firme, immagini, note e forme. |
+| 📑 **Pagine** | Riordina trascinando le miniature, inserisci altri PDF, duplica, estrai pagine in un nuovo file. |
 | 🖍️ **Annota** | Evidenzia, sottolinea e barra (anche la scrittura a mano letta), note, rettangoli, ellissi e frecce; tutti elencati nella scheda *Commenti*. |
 | ✒️ **Firma e immagini** | Disegna la firma o prendila da una foto (lo sfondo viene tolto), inserisci immagini; sposta, ridimensiona, ritaglia e sostituisci. |
 | ⬛ **Oscuramento sicuro** | Il testo sotto il riquadro nero viene eliminato davvero; ricerca automatica di codici fiscali, IBAN, email, telefoni, carte e nomi. |
@@ -48,7 +50,7 @@ Requisiti: Windows 10/11 a 64 bit con WebView2 (già presente su Windows 11). Pe
 
 | Strumento | Tasto | |
 |---|---|---|
-| Modifica | `M` | Clicca un blocco di testo per modificarlo; `Ctrl+Invio` applica, `Esc` annulla. Clicca una riga scritta a mano per correggerne la lettura o riscriverla. |
+| Modifica | `M` | Clicca un blocco di testo per modificarlo; `Ctrl+Invio` applica, `Esc` annulla. Clicca una riga scritta a mano per correggerne la lettura o riscriverla. Trascina un testo o una scritta per spostarli. |
 | Testo | `T` | Clicca un punto della pagina e scrivi nuovo testo. |
 | A mano | `H` | Clicca e scrivi: il testo viene composto con la calligrafia appresa dal documento. |
 | Gomma | `E` | Trascina per cancellare un'area (utile sulle scansioni). |
@@ -56,7 +58,7 @@ Requisiti: Windows 10/11 a 64 bit con WebView2 (già presente su Windows 11). Pe
 | Annota | `A` | Trascina sul testo per evidenziare, sottolineare o barrare; clicca per una nota; trascina per rettangoli, ellissi e frecce. |
 | Firma | `F` | Clicca dove mettere la firma (o un'immagine). La prima volta disegnala o prendila da una foto. |
 | Oscura | `X` | Trascina sull'area da oscurare per sempre. |
-| Oggetti | `O` | Sposta, ridimensiona dall'angolo, `Canc` per eliminare; doppio clic su una nota per riscriverla. |
+| Oggetti | `O` | Prendi e trascina testi, scritte, firme, immagini, note e forme; ridimensiona dall'angolo, `Canc` per eliminare; doppio clic su una nota per riscriverla. |
 
 **Scrittura a mano:** premi **Leggi scrittura** (o *Analizza pagina* nel pannello *Scrittura*). Le righe scritte a mano vengono colorate (un colore per persona), quelle stampate in grigio, quelle dubbie in rosso con un `?`, l'inchiostro non letto in arancione. Cliccando una riga puoi correggerne la lettura, scegliere a quale *scrittura* appartiene, dire se quella scrittura è *A mano* o *Stampata* (vale per tutte le sue righe) e aprire **Segna lettere**: ogni riquadro è un carattere, clicca un riquadro e digita la lettera o il numero (passa da solo al successivo), trascina i bordi per spostarli, *Dividi*/*Unisci* per correggere la segmentazione. Nel pannello *Scritture di questa pagina* scegli una scrittura per vederne le lettere (clicca una lettera per vederne gli esempi ed eliminare quelli sbagliati), rinominarla, *ricordarla* con un nome o completarla con una calligrafia ricordata (solo per le lettere che le mancano). Con lo strumento *A mano* puoi anche cliccare una scritta esistente per riscriverla.
 

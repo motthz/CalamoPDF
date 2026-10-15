@@ -123,11 +123,14 @@ class FontResolver:
         try:
             for f in page.get_fonts(full=True):
                 xref, ext, basefont = f[0], f[1], clean_name(f[3])
-                if basefont == key and ext not in ("n/a", ""):
+                # a CID-keyed CFF font has no table from characters to glyphs: writing with
+                # it would put the wrong letters in the text (the glyphs look right, the
+                # text copied or searched is garbage)
+                if basefont == key and ext not in ("n/a", "", "cid"):
                     _, _, _, buf = self.doc.extract_font(xref)
                     if buf:
                         font = fitz.Font(fontbuffer=buf)
-                    break
+                        break
         except Exception:
             font = None
         self._embedded[key] = font

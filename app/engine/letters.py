@@ -18,7 +18,12 @@ def _gray(rgb):
     # coloured ink (blue, red pens) counts as dark as it looks, not as its luminance
     r, g, b = (rgb[:, :, i].astype(np.uint16) for i in range(3))
     mn = np.minimum(np.minimum(r, g), b)
-    return ((r + g + b) * 51 + mn * 102 >> 8).astype(np.float32)   # 0.6 * mean + 0.4 * min
+    dark = ((r + g + b) * 51 + mn * 102 >> 8).astype(np.float32)   # 0.6 * mean + 0.4 * min
+    # but a bright colour is a highlighter, not ink, however saturated (a yellow marker has
+    # almost no blue): above a certain brightness it counts as bright as it looks
+    lum = (r * 77 + g * 150 + b * 29 >> 8).astype(np.float32)
+    w = np.clip((lum - 110) / 60, 0, 1)
+    return dark * (1 - w) + lum * w
 
 
 def paper(gray, k):

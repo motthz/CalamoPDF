@@ -599,3 +599,36 @@ kbd { font: 600 10px/1 var(--font); padding: 3px 5px; border-radius: 4px; backgr
 .form .row > label { min-width: 0; }
 .form .row > label:not(.grow) { width: 92px; flex: none; }
 .form .row input:not([type=color]):not([type=checkbox]), .form .row select { width: 100%; min-width: 0; }
+
+/* drag page content, merge / split whole PDFs (1.4) */
+.tool-select .blk, .tool-select .ink { pointer-events: auto; cursor: move; }
+.tool-select .blk:hover { background: rgba(122, 167, 255, .08); box-shadow: 0 0 0 1.5px rgba(122, 167, 255, .7); }
+.drag-ghost { position: absolute; z-index: 6; pointer-events: none; background-repeat: no-repeat; border-radius: 3px;
+  outline: 1.5px dashed var(--gold); box-shadow: 0 10px 28px rgba(0,0,0,.28); opacity: .92; }
+.blk.drag-src, .ink.drag-src { background: rgba(150, 150, 160, .25) !important; }
+body.dragging-el, body.dragging-el * { cursor: grabbing !important; }
+.modal.files-modal { width: min(640px, 94vw); display: flex; flex-direction: column; gap: 12px; }
+.files-modal h3 { margin: 0; }
+.files-modal p { margin: 0; }
+.files-modal #mergeBox, .files-modal #splitBox { display: flex; flex-direction: column; gap: 10px; }
+.files-modal #mergeBox[hidden], .files-modal #splitBox[hidden] { display: none; }
+.files-modal .check-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.merge-list { display: flex; flex-direction: column; gap: 6px; max-height: 46vh; overflow-y: auto; }
+.merge-item { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 9px; background: var(--panel-2); border: 1px solid var(--line); position: relative; }
+.merge-item .grip { color: var(--text-3); cursor: grab; letter-spacing: -3px; font-size: 12px; }
+.merge-item > svg { width: 18px; height: 18px; color: var(--danger); flex: none; }
+.merge-item b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 300px; }
+.merge-item small { color: var(--text-3); font-size: 11px; }
+.merge-item .mpages { width: 92px; height: 28px; border-radius: 6px; background: var(--bg-2); border: 1px solid var(--line); padding: 0 8px; outline: none; }
+.merge-item .icon-btn { width: 26px; height: 26px; }
+.merge-item .icon-btn:disabled { opacity: .3; }
+.merge-item .icon-btn svg { width: 13px; height: 13px; }
+.merge-item.dragging { opacity: .4; }
+.merge-item.drop-before { box-shadow: 0 -3px 0 var(--gold); }
+.merge-item.drop-after { box-shadow: 0 3px 0 var(--gold); }
+.split-src { display: flex; flex-direction: column; gap: 4px; padding: 10px; border-radius: 9px; background: var(--panel-2); border: 1px solid var(--line); }
+.split-modes { display: flex; flex-direction: column; gap: 8px; }
+.split-modes label { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.split-modes input:not([type=radio]) { height: 28px; border-radius: 6px; background: var(--bg-2); border: 1px solid var(--line); padding: 0 8px; outline: none; }
+.split-modes input[type=number] { width: 70px; }
+.split-modes input:not([type=radio]):not([type=number]) { width: 180px; }

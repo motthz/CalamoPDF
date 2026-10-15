@@ -33,6 +33,7 @@
     <symbol id="i-doc" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></symbol>
     <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></symbol>
     <symbol id="i-compare" viewBox="0 0 24 24"><rect x="3" y="4" width="7" height="16" rx="1"/><rect x="14" y="4" width="7" height="16" rx="1"/><path d="M12 2v20"/></symbol>
+    <symbol id="i-files" viewBox="0 0 24 24"><path d="M15 2H8a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7z"/><path d="M15 2v5h5M4 7v13a2 2 0 0 0 2 2h10"/></symbol>
     <symbol id="i-feather" viewBox="0 0 24 24"><path d="M4 20 20 4M7 11h6v6M11 7h6v6"/></symbol>
     <symbol id="i-pen" viewBox="0 0 24 24"><path d="M12 19l7-7 3 3-7 7z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18z"/><path d="M2 2l7.6 7.6"/><circle cx="11" cy="11" r="2"/></symbol>
     <symbol id="i-eraser" viewBox="0 0 24 24"><path d="m7 21-4.3-4.3a1 1 0 0 1 0-1.4l10-10a1 1 0 0 1 1.4 0l5.6 5.6a1 1 0 0 1 0 1.4L11 21z"/><path d="M22 21H7M5 11l9 9"/></symbol>
@@ -94,6 +95,7 @@
   <nav class="toolbar" id="toolbar">
     <div class="tb-group">
       <button class="tb-btn" data-cmd="open" data-tip="Apri  Ctrl+O"><svg><use href="#i-open"/></svg></button>
+      <button class="tb-btn" data-cmd="filesTool" data-tip="Unisci o dividi PDF interi"><svg><use href="#i-files"/></svg></button>
       <button class="tb-btn" data-cmd="save" data-tip="Salva  Ctrl+S" data-need-doc><svg><use href="#i-save"/></svg></button>
       <span class="tb-sep"></span>
       <button class="tb-btn" data-cmd="undo" id="btnUndo" data-tip="Annulla  Ctrl+Z" data-need-doc><svg><use href="#i-undo"/></svg></button>
@@ -102,7 +104,7 @@
 
     <div class="segmented" id="tools" data-need-doc>
       <button data-tool="view" data-tip="Naviga  (N)"><svg><use href="#i-cursor"/></svg><span>Naviga</span></button>
-      <button data-tool="edit" class="active" data-tip="Modifica testo esistente  (M)"><svg><use href="#i-edit"/></svg><span>Modifica</span></button>
+      <button data-tool="edit" class="active" data-tip="Modifica testo esistente: clicca per scrivere, trascina per spostarlo  (M)"><svg><use href="#i-edit"/></svg><span>Modifica</span></button>
       <button data-tool="text" data-tip="Aggiungi testo  (T)"><svg><use href="#i-text"/></svg><span>Testo</span></button>
       <button data-tool="hand" data-tip="Scrivi con la calligrafia appresa  (H)"><svg><use href="#i-pen"/></svg><span>A mano</span></button>
       <button data-tool="erase" data-tip="Cancella un'area  (E)"><svg><use href="#i-eraser"/></svg><span>Gomma</span></button>
@@ -110,7 +112,7 @@
       <button data-tool="annotate" data-tip="Evidenzia, sottolinea, barra, note e forme  (A)"><svg><use href="#i-marker"/></svg><span>Annota</span></button>
       <button data-tool="insert" data-tip="Firma o immagine: clicca dove metterla  (F)"><svg><use href="#i-sign"/></svg><span>Firma</span></button>
       <button data-tool="redact" data-tip="Oscura per sempre un'area: il testo sotto viene eliminato  (X)"><svg><use href="#i-redact"/></svg><span>Oscura</span></button>
-      <button data-tool="select" data-tip="Sposta, ridimensiona ed elimina firme, immagini, note e forme  (O)"><svg><use href="#i-move"/></svg><span>Oggetti</span></button>
+      <button data-tool="select" data-tip="Prendi e trascina testi, scritte, firme, immagini, note e forme  (O)"><svg><use href="#i-move"/></svg><span>Oggetti</span></button>
     </div>
 
     <div class="tb-group right">
@@ -168,7 +170,7 @@
           <span class="muted small">Trascina sull'area da oscurare: testo e immagini sotto vengono eliminati davvero. Per cercare dati come codici fiscali o IBAN usa la scheda <b>Documento</b>.</span>
         </div>
         <div class="opts" data-opts="select">
-          <span class="muted small">Trascina per spostare, usa l'angolo per ridimensionare, <kbd>Canc</kbd> per eliminare. Doppio clic su una nota per scriverci.</span>
+          <span class="muted small">Prendi e trascina qualsiasi elemento: testo, scritte a mano, firme, immagini, note, forme. Angolo per ridimensionare, <kbd>Canc</kbd> per eliminare.</span>
           <button class="btn ghost sm" id="objReplace" disabled><svg><use href="#i-image"/></svg>Sostituisci immagine</button>
           <button class="btn ghost sm" id="objCrop" disabled>Ritaglia</button>
           <button class="btn ghost sm danger-text" id="objDelete" disabled><svg><use href="#i-trash"/></svg>Elimina</button>
@@ -202,6 +204,7 @@
           <div class="welcome-actions">
             <button class="btn primary lg" data-cmd="open"><svg><use href="#i-open"/></svg><span>Apri un PDF</span></button>
             <button class="btn ghost lg" data-cmd="newDoc"><svg><use href="#i-file-new"/></svg><span>Nuovo documento</span></button>
+            <button class="btn ghost lg" data-cmd="filesTool"><svg><use href="#i-files"/></svg><span>Unisci o dividi PDF</span></button>
           </div>
           <p class="hint">oppure trascina qui un file PDF</p>
           <div class="recent" id="recentWrap" hidden>
@@ -288,10 +291,7 @@
             <button class="btn ghost sm" data-cmd="extractPages" data-need-doc><svg><use href="#i-export"/></svg>Estrai in un nuovo PDF…</button>
             <button class="btn ghost sm danger-text" data-cmd="deletePages" data-need-doc><svg><use href="#i-trash"/></svg>Elimina</button>
           </div>
-          <div class="row gap">
-            <label class="grow">Dividi ogni<input id="splitEvery" type="number" min="1" value="1"></label>
-            <button class="btn ghost sm self-end" data-cmd="splitPdf" data-need-doc>pagine…</button>
-          </div>
+          <button class="btn ghost sm" data-cmd="splitCurrent" data-need-doc><svg><use href="#i-files"/></svg>Dividi questo PDF in più file…</button>
         </div>
         <div class="section-title">Stile per il nuovo testo</div>
         <div class="card form">
@@ -551,6 +551,41 @@
   </div>
 </div>
 
+
+<!-- Merge / split whole PDFs -->
+<div class="modal-back" id="filesModal" hidden>
+  <div class="modal files-modal">
+    <div class="row between"><h3>Unisci o dividi PDF</h3><button class="icon-btn" id="filesClose" title="Chiudi"><svg><use href="#i-x"/></svg></button></div>
+    <div class="seg-switch" id="filesMode">
+      <button data-m="merge" class="active"><svg><use href="#i-plus"/></svg>Unisci</button>
+      <button data-m="split"><svg><use href="#i-files"/></svg>Dividi</button>
+    </div>
+    <div id="mergeBox">
+      <p class="muted small">Metti in ordine i PDF (trascinali o usa le frecce). Per ognuno puoi scegliere solo alcune pagine, per esempio “1-3, 5”.</p>
+      <div class="merge-list" id="mergeList"></div>
+      <div class="row gap wrap">
+        <button class="btn ghost sm" id="mergeAdd"><svg><use href="#i-plus"/></svg>Aggiungi PDF…</button>
+        <button class="btn ghost sm" id="mergeAddCurrent"><svg><use href="#i-pdf"/></svg>Aggiungi il documento aperto</button>
+      </div>
+      <label class="check-row"><input type="checkbox" id="mergeOpen" checked> Apri il PDF unito</label>
+      <div class="modal-actions"><span class="muted small grow" id="mergeTotal"></span><button class="btn primary sm" id="mergeGo" disabled>Unisci in un nuovo PDF…</button></div>
+    </div>
+    <div id="splitBox" hidden>
+      <div class="split-src">
+        <span class="muted small">PDF da dividere</span>
+        <div class="row gap"><b class="grow" id="splitName">—</b><button class="btn ghost sm" id="splitPick">Scegli un PDF…</button></div>
+      </div>
+      <div class="split-modes" id="splitModes">
+        <label><input type="radio" name="splitMode" value="every" checked> Ogni <input id="splitN" type="number" min="1" value="1"> pagine</label>
+        <label><input type="radio" name="splitMode" value="ranges"> Per intervalli <input id="splitRanges" placeholder="1-3, 4-6, 7-" spellcheck="false"></label>
+        <label><input type="radio" name="splitMode" value="single"> Una pagina per file</label>
+        <label><input type="radio" name="splitMode" value="bookmarks"> Un file per capitolo (segnalibri)</label>
+        <label><input type="radio" name="splitMode" value="size"> File al massimo di <input id="splitMB" type="number" min="0.2" step="0.5" value="10"> MB (per email)</label>
+      </div>
+      <div class="modal-actions"><button class="btn primary sm" id="splitGo">Dividi e scegli la cartella…</button></div>
+    </div>
+  </div>
+</div>
 <!-- Signature -->
 <div class="modal-back" id="sigModal" hidden>
   <div class="modal sig-modal">
