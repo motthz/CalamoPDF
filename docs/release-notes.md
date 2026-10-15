@@ -1,4 +1,13 @@
-## Novità di Calamo PDF Studio 1.4.0
+## Novità di Calamo PDF Studio 1.4.1
+
+**Un aspetto più sobrio e professionale.**
+- Niente più pulsanti dorati con sfumature e aloni luminosi: il pulsante principale è a tinta unita (chiaro sul tema scuro, scuro sul tema chiaro), gli altri sono piatti con bordi sottili.
+- Colori grafite neutri con un solo accento blu inchiostro, usato solo per selezione e focus.
+- Logo e titoli a tinta unita, niente testo sfumato né sfondi con bagliori; menu e riquadri non più trasparenti e sfocati.
+- Titoli delle sezioni in caratteri normali invece che in maiuscolo spaziato, angoli meno arrotondati, ombre più leggere.
+- Schermata iniziale più essenziale, con le funzioni in un elenco invece che in schede.
+
+## Calamo PDF Studio 1.4.0
 
 **Tutti gli strumenti per lavorare sui PDF, oltre alla scrittura a mano.**
 
@@ -125,7 +134,7 @@
 - Le scorciatoie da tastiera tornano a funzionare dopo aver chiuso un riquadro con Esc.
 
 ### Download
-- **CalamoPDF-Setup-1.4.0.exe** — installer per Windows.
+- **CalamoPDF-Setup-1.4.1.exe** — installer per Windows.
 - **CalamoPDF.exe** — versione portabile.
 
 Chi ha già una versione precedente riceve questa in automatico.

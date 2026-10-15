@@ -9,13 +9,10 @@
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <defs>
-    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#F6DFA4"/><stop offset=".55" stop-color="#D9A84E"/><stop offset="1" stop-color="#A8732A"/>
-    </linearGradient>
     <symbol id="logo" viewBox="0 0 64 64">
-      <path d="M32 4c9 9 16 20 16 31 0 7-4 12-9 15l-4 10h-6l-4-10c-5-3-9-8-9-15C16 24 23 13 32 4z" fill="url(#gold)"/>
-      <path d="M32 18v24" stroke="#14151b" stroke-width="2.6" stroke-linecap="round"/>
-      <circle cx="32" cy="42" r="3.6" fill="#14151b"/>
+      <path d="M32 4c9 9 16 20 16 31 0 7-4 12-9 15l-4 10h-6l-4-10c-5-3-9-8-9-15C16 24 23 13 32 4z" fill="currentColor" stroke="none"/>
+      <path d="M32 18v24" style="stroke: var(--bg)" stroke-width="2.6" stroke-linecap="round"/>
+      <circle cx="32" cy="42" r="3.6" style="fill: var(--bg)" stroke="none"/>
     </symbol>
     <symbol id="i-open" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1M3 7v10a2 2 0 0 0 2 2h12.5a2 2 0 0 0 1.9-1.4L22 11H8.3a2 2 0 0 0-1.9 1.4L3.5 19"/></symbol>
     <symbol id="i-save" viewBox="0 0 24 24"><path d="M5 3h11l5 5v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M7 3v5h8V3M7 21v-7h10v7"/></symbol>
@@ -53,7 +50,7 @@
     <symbol id="i-pen" viewBox="0 0 24 24"><path d="M12 19l7-7 3 3-7 7z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18z"/><path d="M2 2l7.6 7.6"/><circle cx="11" cy="11" r="2"/></symbol>
     <symbol id="i-eraser" viewBox="0 0 24 24"><path d="m7 21-4.3-4.3a1 1 0 0 1 0-1.4l10-10a1 1 0 0 1 1.4 0l5.6 5.6a1 1 0 0 1 0 1.4L11 21z"/><path d="M22 21H7M5 11l9 9"/></symbol>
     <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></symbol>
-    <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></symbol>
+    <symbol id="i-read" viewBox="0 0 24 24"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><path d="M8 10h8M8 14h5"/></symbol>
     <symbol id="i-export" viewBox="0 0 24 24"><path d="M12 3v12M7 8l5-5 5 5"/><path d="M5 15v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/></symbol>
     <symbol id="i-word" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="m7 8 1.6 8L12 10l3.4 6L17 8"/></symbol>
     <symbol id="i-excel" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="m8 8 8 8M16 8l-8 8"/></symbol>
@@ -139,7 +136,7 @@
       <button class="tb-btn" data-cmd="find" data-tip="Trova e sostituisci  Ctrl+F" data-need-doc><svg><use href="#i-search"/></svg></button>
       <button class="tb-btn" data-cmd="speak" id="btnSpeak" data-tip="Leggi ad alta voce" data-need-doc><svg><use href="#i-speak"/></svg></button>
       <button class="tb-btn" data-cmd="present" data-tip="Presentazione a schermo intero  F5" data-need-doc><svg><use href="#i-present"/></svg></button>
-      <button class="btn ghost" data-cmd="analyze" data-need-doc><svg><use href="#i-sparkle"/></svg><span>Leggi scrittura</span></button>
+      <button class="btn ghost" data-cmd="analyze" data-need-doc><svg><use href="#i-read"/></svg><span>Leggi scrittura</span></button>
       <div class="menu-wrap">
         <button class="btn primary" data-cmd="exportMenu" data-need-doc><svg><use href="#i-export"/></svg><span>Esporta</span><svg class="chev"><use href="#i-chev-down"/></svg></button>
         <div class="menu" id="exportMenu" hidden>
@@ -271,7 +268,7 @@
 
       <div class="tab-body" data-panel="hand">
         <div class="card hero-card">
-          <div class="hc-title"><svg><use href="#i-sparkle"/></svg>Comprensione della pagina</div>
+          <div class="hc-title"><svg><use href="#i-read"/></svg>Comprensione della pagina</div>
           <p class="muted small">Calamo legge testo scritto a mano e scansionato, impara la calligrafia e ti lascia correggere ciò che ha capito male.</p>
           <div class="row gap">
             <button class="btn primary sm grow" data-cmd="analyze" data-need-doc>Analizza pagina</button>

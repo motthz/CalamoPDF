@@ -742,7 +742,7 @@ async function openInk(P, line, anchor) {
 function openHandNew(P, pt, e) {
   closePop();
   const anchor = document.createElement("div");
-  anchor.style.cssText = `position:absolute;left:${pt.x * scale()}px;top:${pt.y * scale()}px;width:2px;height:${S.handHeight * scale()}px;background:var(--gold);box-shadow:0 0 8px var(--gold)`;
+  anchor.style.cssText = `position:absolute;left:${pt.x * scale()}px;top:${pt.y * scale()}px;width:2px;height:${S.handHeight * scale()}px;background:#2F4C95`;
   P.overlay.appendChild(anchor);
   S.pop = { P, pt, anchor, kind: "new", temp: anchor };
   $("#inkRemove").hidden = true;
@@ -1582,7 +1582,7 @@ const TOUR = [
     text: "Premi “Apri un PDF” oppure trascina un file nella finestra. Le pagine compaiono a sinistra; zoom con Ctrl + rotellina." },
   { icon: "i-edit", title: "Modifica il testo", keys: ["M"],
     text: "Con lo strumento Modifica clicca una frase e riscrivila sul posto: font, dimensione e colore restano quelli originali. Ctrl+Invio applica, Esc annulla." },
-  { icon: "i-sparkle", title: "Leggi la scrittura a mano",
+  { icon: "i-read", title: "Leggi la scrittura a mano",
     text: "Premi “Leggi scrittura”. Le righe scritte a mano sono colorate (un colore per persona), quelle stampate in grigio, quelle dubbie in rosso con un “?”, e l'inchiostro che non riesce a leggere in arancione: cliccalo e scrivi cosa c'è." },
   { icon: "i-letters", title: "Correggi e segna le lettere",
     text: "Clicca una riga per correggerne la lettura. Con “Segna lettere” indichi dove si trova ogni lettera e numero, così la calligrafia della pagina diventa più completa." },
