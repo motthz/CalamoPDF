@@ -15,6 +15,7 @@ from . import handwriting as HW
 from . import writers as WR
 from .handwriting import HandwritingLibrary, PageWritings
 from .lexicon import LEXICON, WORD_RE
+from .editing import EditingMixin
 from .ocr import PRINT_BELOW, Learning, prepare_page, read_page, read_region
 
 REDACT_KW = dict(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=fitz.PDF_REDACT_LINE_ART_NONE)
@@ -67,7 +68,7 @@ def _to_text(page, rect):
     return fitz.Rect(rect) * page.derotation_matrix
 
 
-def _write_upright(page, tw):
+def _write_upright(page, tw, opacity=-1, pre=None):
     """Write a TextWriter filled in displayed coordinates so the text lands exactly there,
     reading horizontally, whatever the page rotation and cropbox.
 
@@ -81,10 +82,12 @@ def _write_upright(page, tw):
             shift = fitz.Matrix(1, 0, 0, 1, cb.x, cb.y + mb.y0 - delta)
         m = ~tw.ctm * ~_mupdf_ctm(page) * ~shift
     except Exception:
-        return tw.write_text(page)
+        return tw.write_text(page, opacity=opacity)
+    if pre is not None:                       # e.g. a watermark turned around its centre
+        m = pre * m
     if abs(m.a - 1) + abs(m.b) + abs(m.c) + abs(m.d - 1) + abs(m.e) + abs(m.f) < 1e-6:
-        return tw.write_text(page)
-    tw.write_text(page, matrix=m)
+        return tw.write_text(page, opacity=opacity)
+    tw.write_text(page, matrix=m, opacity=opacity)
 
 
 def _write_hidden(page, tw):
@@ -168,7 +171,7 @@ def _find_in_line(line, term):
     return out
 
 
-class Session:
+class Session(EditingMixin):
     MAX_UNDO = 40
 
     def __init__(self):
@@ -186,13 +189,16 @@ class Session:
         self.page_versions = {}
 
     # ------------------------------------------------------------------ lifecycle
-    def open(self, path):
+    def open(self, path, password=None):
         with self.lock:
             with open(path, "rb") as f:
                 data = f.read()
             doc = fitz.open(stream=data, filetype="pdf")
             if doc.needs_pass:
-                raise RuntimeError("Il PDF è protetto da password.")
+                if not password:
+                    raise RuntimeError("PASSWORD_REQUIRED")
+                if not doc.authenticate(password):
+                    raise RuntimeError("PASSWORD_WRONG")
             self.doc, self.path = doc, path
             self.dirty = False
             self.undo_stack, self.redo_stack = [], []
@@ -517,7 +523,7 @@ class Session:
                 })
             styles = self.hands[index].listing(self.ink.get(index, [])) if index in self.hands else []
             return {"blocks": out, "ink": self._ink_public(index), "styles": styles,
-                    "version": self.page_versions.get(index, 0)}
+                    "objects": self.objects(index), "version": self.page_versions.get(index, 0)}
 
     def _raw_block(self, page, ref):
         """ref: block bbox (preferred - indices shift after edits) or index."""

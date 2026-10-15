@@ -5,7 +5,8 @@ const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const PT = 4 / 3;            // css px per PDF point at 100%
 const TOOL_NAMES = { view: "Naviga", edit: "Modifica", text: "Nuovo testo", hand: "Scrittura a mano", erase: "Gomma",
-                     mark: "Segna una scritta: trascina un riquadro intorno" };
+                     mark: "Segna una scritta: trascina un riquadro intorno", annotate: "Annota", insert: "Firma e immagini",
+                     redact: "Oscura: trascina sull'area", select: "Oggetti" };
 
 const isDoubt = l => l.source === "ocr" && l.doubt > 0.4 && l.kind !== "print";
 // writings (people / typefaces) of each page, as the engine groups them
@@ -147,11 +148,22 @@ function setDocUI(has) {
 // ---------------------------------------------------------------- document
 async function openPath(path) {
   if (!(await confirmDiscard())) return;
-  await guarded(async () => loadDoc(await call("open_path", path)), "Apertura del documento…");
+  await guarded(async () => openResult(await call("open_path", path)), "Apertura del documento…");
+}
+// a protected PDF asks for its password, until it is right or the user gives up
+async function openResult(info) {
+  while (info && info.needPassword) {
+    const pw = await modal("Documento protetto", info.wrong ? "Password errata, riprova." : `“${info.path.split(/[\\/]/).pop()}” è protetto: scrivi la password per aprirlo.`,
+      [["Annulla", false, "ghost"], ["Apri", true, "primary"]], "");
+    if (!pw) return;
+    busy("Apertura del documento…");
+    try { info = await call("open_with_password", info.path, pw); } finally { busy(false); }
+  }
+  if (info) loadDoc(info);
 }
 async function openDialog() {
   if (!(await confirmDiscard())) return;
-  await guarded(async () => { const info = await call("open_dialog"); if (info) loadDoc(info); });
+  await guarded(async () => { await openResult(await call("open_dialog")); });
 }
 async function newDoc() {
   if (!(await confirmDiscard())) return;
@@ -172,6 +184,7 @@ function loadDoc(info) {
   S.doc = info;
   S.inkCache = {};
   S.hits = []; S.hitIdx = -1;
+  resetExtras();
   setDocUI(true);
   buildPages();
   updateInfo(info);
@@ -241,6 +254,7 @@ function buildPages() {
     th.className = "thumb"; th.dataset.i = i;
     th.innerHTML = `<div class="tframe"><img alt=""></div><span class="tnum">${i + 1}</span>`;
     th.onclick = () => goToPage(i);
+    bindThumbDrag(th, i);
     thumbs.appendChild(th);
     const P = { i, w: p.w, h: p.h, v: p.v, el, th, img: $("img.render", el), overlay: $(".overlay", el),
       renderKey: null, dataV: -1, data: null, visible: false, thumbVisible: false, thumbKey: null, canvas: null };
@@ -300,7 +314,7 @@ async function loadThumb(P) {
 function drawOverlay(P) {
   if (!P.data) return;
   const s = scale(), ov = P.overlay;
-  $$(".blk, .ink, .hit", ov).forEach(n => n.remove());
+  $$(".blk, .ink, .hit, .obj, .diff", ov).forEach(n => n.remove());
   const frag = document.createDocumentFragment();
   P.data.blocks.forEach(b => {
     const d = document.createElement("div");
@@ -329,6 +343,7 @@ function drawOverlay(P) {
     Object.assign(d.style, box(h.bbox, s, 1));
     frag.appendChild(d);
   });
+  drawExtras(P, frag, s);
   ov.appendChild(frag);
   P.el.classList.toggle("show-ink", (P.data.ink || []).length > 0);
 }
@@ -407,6 +422,7 @@ function setTool(t) {
   const st = $("#stage");
   st.className = "stage tool-" + t;
   $("#stTool").textContent = TOOL_NAMES[t];
+  showToolOpts(t);
   if (t === "hand" && !S.glyphCount)
     toast("Questa pagina non ha ancora una calligrafia: analizzala, oppure usa una calligrafia ricordata. Nel frattempo uso un carattere calligrafico.", "warn");
 }
@@ -423,6 +439,7 @@ function bindOverlay(P) {
     if (e.button !== 0 || e.target.closest(".editor")) return;
     if (S.tool === "erase") return startErase(P, e);
     if (S.tool === "mark") return startRect(P, e, rect => markInk(P, rect));
+    if (toolMouseDown(P, e)) return;
   });
   ov.addEventListener("click", e => {
     if (e.target.closest(".editor")) return;
@@ -436,6 +453,8 @@ function bindOverlay(P) {
       if (blk) return startEdit(P, P.data.blocks.find(b => b.id === +blk.dataset.id), e);
     } else if (S.tool === "text") {
       startNewText(P, pt);
+    } else if (toolClick(P, e, pt)) {
+      return;
     } else if (S.tool === "hand") {
       // clicking existing handwriting edits it in place instead of writing a new line
       const ink = e.target.closest(".ink");
@@ -1443,6 +1462,7 @@ $$("#tools button").forEach(b => b.onclick = () => setTool(b.dataset.tool));
 $$("#tabs button").forEach(b => b.onclick = () => {
   $$("#tabs button").forEach(x => x.classList.toggle("active", x === b));
   $$(".tab-body").forEach(p => p.hidden = p.dataset.panel !== b.dataset.tab);
+  if (b.dataset.tab === "comments") refreshComments();
 });
 
 // new-text style panel
@@ -1520,8 +1540,9 @@ document.addEventListener("keydown", e => {
   }
   if (e.key === "Escape" && !$("#glyphModal").hidden) { $("#glyphModal").hidden = true; return; }
   if (typing || !S.doc) return;
-  const tools = { n: "view", m: "edit", t: "text", h: "hand", e: "erase", r: "mark" };
+  const tools = { n: "view", m: "edit", t: "text", h: "hand", e: "erase", r: "mark", a: "annotate", f: "insert", x: "redact", o: "select" };
   if (tools[k]) setTool(tools[k]);
+  if ((e.key === "Delete" || e.key === "Backspace") && S.sel) { e.preventDefault(); deleteSelected(); }
   if (e.key === "Escape") { closePop(); $("#exportMenu").hidden = true; }
   if (e.key === "PageDown") goToPage(Math.min(S.current + 1, S.pages.length - 1));
   if (e.key === "PageUp") goToPage(Math.max(S.current - 1, 0));
@@ -1544,7 +1565,7 @@ document.addEventListener("mouseover", e => {
 });
 
 // drag & drop (the file path is resolved by the Python side)
-document.addEventListener("dragover", e => { e.preventDefault(); document.body.classList.add("drag-over"); });
+document.addEventListener("dragover", e => { e.preventDefault(); if (S.dragPage == null) document.body.classList.add("drag-over"); });
 document.addEventListener("dragleave", e => { if (!e.relatedTarget) document.body.classList.remove("drag-over"); });
 document.addEventListener("drop", e => { e.preventDefault(); document.body.classList.remove("drag-over"); });
 window.addEventListener("resize", debounce(() => { positionEditBar(); positionPop(); }, 50));
@@ -1565,6 +1586,8 @@ const TOUR = [
     text: "Sulla stessa pagina possono scrivere più persone: Calamo le separa (un colore per persona) e tiene a parte lo stampato. Ogni riga viene riscritta solo con le lettere della sua scrittura; se ha sbagliato, scegli la scrittura giusta nel riquadro della riga. “Ricorda…” la salva per altre pagine o documenti." },
   { icon: "i-pen", title: "Scrivi con la tua calligrafia", keys: ["H"],
     text: "Con lo strumento A mano clicca un punto vuoto della pagina e scrivi, oppure clicca una scritta esistente per riscriverla: il testo viene composto con le lettere della pagina, nello stesso inchiostro. Poi salva o esporta in Word ed Excel." },
+  { icon: "i-marker", title: "Annota, firma, oscura", keys: ["A", "F", "X", "O"],
+    text: "Annota (A) per evidenziare, sottolineare, lasciare note e forme; Firma (F) per mettere la tua firma o un'immagine; Oscura (X) per eliminare per sempre dati riservati; Oggetti (O) per spostarli e ridimensionarli. Trascina le miniature per riordinare le pagine; nella scheda Documento trovi numeri di pagina, filigrana, confronto e protezione." },
   { icon: "i-download", title: "Sempre aggiornato",
     text: "Quando su GitHub esce una nuova versione, Calamo la scarica da solo e la installa alla chiusura. Puoi disattivarlo nelle Impostazioni." },
 ];

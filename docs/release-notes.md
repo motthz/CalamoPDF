@@ -1,4 +1,32 @@
-## Novità di Calamo PDF Studio 1.3.2
+## Novità di Calamo PDF Studio 1.4.0
+
+**Tutti gli strumenti per lavorare sui PDF, oltre alla scrittura a mano.**
+
+**Pagine**
+- **Riordina** trascinando le miniature a sinistra.
+- **Unisci** altri PDF dopo la pagina corrente, **duplica** una pagina, **estrai** pagine in un nuovo PDF (es. "1-3, 5"), **elimina** più pagine insieme e **dividi** il documento in file da N pagine (scheda *Pagina*).
+
+**Annota** (tasto A)
+- **Evidenzia, sottolinea e barra** trascinando sul testo: il segno segue le righe, anche sulla scrittura a mano letta da Calamo e sulle scansioni.
+- **Note** (clicca dove lasciarla), **rettangoli, ellissi e frecce**, in 7 colori.
+- Nuova scheda **Commenti**: tutti i segni e le note del documento, con salto alla pagina, modifica del testo ed eliminazione.
+
+**Firma e immagini** (tasto F)
+- **Disegna la firma** con mouse o penna, oppure **prendila da una foto**: lo sfondo della carta viene tolto e resta solo l'inchiostro. Le firme restano salvate per i prossimi documenti; si mettono con un clic.
+- **Inserisci immagini** con un clic sulla pagina.
+- Strumento **Oggetti** (tasto O): sposta, ridimensiona (in proporzione), ritaglia, sostituisci ed elimina firme, immagini (anche quelle già presenti nel PDF), note e forme; doppio clic su una nota per riscriverla.
+
+**Oscura** (tasto X)
+- Trascina su un'area: testo e immagini sotto vengono **eliminati davvero** dal PDF, non solo coperti.
+- Scheda *Documento*: **cerca e oscura in un colpo** codici fiscali, IBAN, email, telefoni, carte di credito e qualsiasi testo (es. un nome), anche nella scrittura a mano letta; volendo toglie anche autore e proprietà del file.
+
+**Documento**
+- **Intestazione, piè di pagina e numeri di pagina** con le variabili {n}, {N}, {data}, {file}; **filigrana** (es. BOZZA) con colore e trasparenza.
+- **Confronta con un'altra versione**: le differenze vengono segnate sulla pagina e il testo aggiunto/tolto elencato pagina per pagina; per le scansioni il confronto è sull'immagine.
+- **Copia leggera** (immagini ricompresse, tre livelli di qualità) e **copia protetta** con password di apertura e limiti a stampa, copia e modifiche.
+- I PDF protetti da password ora si aprono: Calamo chiede la password.
+
+## Calamo PDF Studio 1.3.2
 
 **Si modificano solo le lettere, lo sfondo resta com'era.**
 - Quando riscrivi una scritta, Calamo riconosce pixel per pixel quali sono le lettere e quali lo sfondo: carta, evidenziatore, bordi delle tabelle, righe del quaderno, sottolineature.
@@ -56,7 +84,7 @@
 - Le scorciatoie da tastiera tornano a funzionare dopo aver chiuso un riquadro con Esc.
 
 ### Download
-- **CalamoPDF-Setup-1.3.2.exe** — installer per Windows.
+- **CalamoPDF-Setup-1.4.0.exe** — installer per Windows.
 - **CalamoPDF.exe** — versione portabile.
 
 Chi ha già una versione precedente riceve questa in automatico.

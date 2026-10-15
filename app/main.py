@@ -25,7 +25,7 @@ from engine.ocr import available_languages  # noqa: E402
 from engine.storage import load_json, save_json  # noqa: E402
 import updater  # noqa: E402
 
-VERSION = "1.3.2"
+VERSION = "1.4.0"
 
 _user32 = ctypes.windll.user32
 _user32.FindWindowW.restype = wintypes.HWND
@@ -248,10 +248,19 @@ class Api:
     def open_path(self, path):
         return self._open(path)
 
-    def _open(self, path):
-        info = self._s.open(path)
+    def _open(self, path, password=None):
+        try:
+            info = self._s.open(path, password)
+        except RuntimeError as e:
+            if str(e) in ("PASSWORD_REQUIRED", "PASSWORD_WRONG"):
+                return {"needPassword": True, "path": path, "wrong": str(e) == "PASSWORD_WRONG"}
+            raise
         self._remember(path)
         return info
+
+    @safe
+    def open_with_password(self, path, password):
+        return self._open(path, password)
 
     @safe
     def new_doc(self):
@@ -283,6 +292,173 @@ class Api:
     @safe
     def save_as(self):
         return self._save_as()
+
+    # ---------------------------------------------------------------- file pickers
+    def _pick(self, label, exts, multiple=False):
+        pattern = ";".join(f"*.{e}" for e in exts)
+        res = self._window.create_file_dialog(_dialog_kind("OPEN"), allow_multiple=multiple,
+                                             file_types=(f"{label} ({pattern})",))
+        if not res:
+            return None
+        return list(res) if multiple else res[0]
+
+    def _pick_save(self, suggested, label="Documenti PDF", ext="pdf"):
+        res = self._window.create_file_dialog(_dialog_kind("SAVE"), save_filename=suggested,
+                                             file_types=(f"{label} (*.{ext})",))
+        if not res:
+            return None
+        path = res if isinstance(res, str) else res[0]
+        return path if path.lower().endswith("." + ext) else path + "." + ext
+
+    def _base(self):
+        return os.path.splitext(os.path.basename(self._s.path or "Documento.pdf"))[0]
+
+    # ---------------------------------------------------------------- pages
+    @safe
+    def move_page(self, src, dst):
+        return self._s.move_page(src, dst)
+
+    @safe
+    def merge_pdf(self, after=None):
+        paths = self._pick("Documenti PDF", ["pdf"], multiple=True)
+        if not paths:
+            return None
+        info, added, at = None, 0, None
+        for p in paths:
+            info = self._s.merge_pdf(p, after)
+            at = info["at"] if at is None else at
+            if after is not None:
+                after += info["added"]
+            added += info["added"]
+        return {**info, "added": added, "at": at, "files": len(paths)}
+
+    @safe
+    def extract_pages(self, spec):
+        path = self._pick_save(f"{self._base()} - estratto.pdf")
+        return self._s.extract_pages(spec, path) if path else None
+
+    @safe
+    def split_every(self, every):
+        res = self._window.create_file_dialog(_dialog_kind("FOLDER"))
+        if not res:
+            return None
+        return self._s.split_every(every, res[0] if isinstance(res, (list, tuple)) else res, self._base())
+
+    @safe
+    def delete_pages(self, spec):
+        return self._s.delete_pages(spec)
+
+    @safe
+    def duplicate_page(self, index):
+        return self._s.duplicate_page(index)
+
+    # ---------------------------------------------------------------- objects, pictures, signatures
+    @safe
+    def objects(self, index):
+        return self._s.objects(index)
+
+    @safe
+    def move_object(self, index, src, oid, rect):
+        return self._s.move_object(index, src, oid, rect)
+
+    @safe
+    def delete_object(self, index, src, oid):
+        return self._s.delete_object(index, src, oid)
+
+    @safe
+    def edit_object(self, index, oid, content=None, color=None):
+        return self._s.edit_object(index, oid, content, color)
+
+    @safe
+    def insert_picture(self, index, x, y):
+        path = self._pick("Immagini", ["png", "jpg", "jpeg", "bmp", "gif", "tif", "tiff", "webp"])
+        if not path:
+            return None
+        with open(path, "rb") as f:
+            return self._s.insert_picture(index, f.read(), x, y)
+
+    @safe
+    def replace_picture(self, index, src, oid):
+        path = self._pick("Immagini", ["png", "jpg", "jpeg", "bmp", "gif", "tif", "tiff", "webp"])
+        if not path:
+            return None
+        with open(path, "rb") as f:
+            return self._s.replace_picture(index, src, oid, f.read())
+
+    @safe
+    def crop_picture(self, index, oid, frac):
+        return self._s.crop_picture(index, oid, frac)
+
+    @safe
+    def signatures(self):
+        return self._s.signatures()
+
+    @safe
+    def save_signature_drawn(self, name, data_url):
+        import base64
+        return self._s.save_signature(name, base64.b64decode(data_url.split(",", 1)[1]), clean=False)
+
+    @safe
+    def import_signature(self, name):
+        path = self._pick("Immagini", ["png", "jpg", "jpeg", "bmp", "tif", "tiff", "webp"])
+        if not path:
+            return None
+        with open(path, "rb") as f:
+            return self._s.save_signature(name or os.path.splitext(os.path.basename(path))[0], f.read(), clean=True)
+
+    @safe
+    def delete_signature(self, name):
+        return self._s.delete_signature(name)
+
+    @safe
+    def place_signature(self, index, name, x, y):
+        return self._s.place_signature(index, name, x, y)
+
+    # ---------------------------------------------------------------- markup and comments
+    @safe
+    def mark_text(self, index, rect, kind, color=None):
+        return self._s.mark_text(index, rect, kind, color)
+
+    @safe
+    def add_note(self, index, x, y, text, color=None):
+        return self._s.add_note(index, x, y, text, color)
+
+    @safe
+    def add_shape(self, index, kind, a, b, color=None, width=2):
+        return self._s.add_shape(index, kind, a, b, color, width)
+
+    @safe
+    def comments(self):
+        return self._s.comments()
+
+    # ---------------------------------------------------------------- redaction, stamps
+    @safe
+    def find_sensitive(self, kinds, term=""):
+        return self._s.find_sensitive(kinds, term)
+
+    @safe
+    def redact(self, areas, metadata=False):
+        return self._s.redact(areas, metadata)
+
+    @safe
+    def stamp_pages(self, spec):
+        return self._s.stamp_pages(spec)
+
+    # ---------------------------------------------------------------- compare, optimise, protect
+    @safe
+    def compare_with(self):
+        path = self._pick("Documenti PDF", ["pdf"])
+        return self._s.compare_with(path) if path else None
+
+    @safe
+    def save_optimized(self, quality="media"):
+        path = self._pick_save(f"{self._base()} - leggero.pdf")
+        return self._s.save_optimized(path, quality) if path else None
+
+    @safe
+    def save_protected(self, user_pw, owner_pw, allow_print=True, allow_copy=False, allow_edit=False):
+        path = self._pick_save(f"{self._base()} - protetto.pdf")
+        return self._s.save_protected(path, user_pw, owner_pw, allow_print, allow_copy, allow_edit) if path else None
 
     def _ask_export_path(self, ext, label):
         base = os.path.splitext(os.path.basename(self._s.path or "Documento.pdf"))[0]

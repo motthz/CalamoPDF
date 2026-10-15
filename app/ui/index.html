@@ -24,6 +24,16 @@
     <symbol id="i-cursor" viewBox="0 0 24 24"><path d="M5 3l14 7-6 2-2 6z"/></symbol>
     <symbol id="i-edit" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></symbol>
     <symbol id="i-text" viewBox="0 0 24 24"><path d="M4 7V5h16v2M9 19h6M12 5v14"/></symbol>
+    <symbol id="i-marker" viewBox="0 0 24 24"><path d="m9 11-6 6v3h9l3-3"/><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/></symbol>
+    <symbol id="i-sign" viewBox="0 0 24 24"><path d="M3 17c3-1 4-6 6-6s1 6 3 6 3-4 4-4 2 3 5 3"/><path d="M3 21h18"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></symbol>
+    <symbol id="i-redact" viewBox="0 0 24 24"><rect x="3" y="8" width="18" height="8" rx="1.5" fill="currentColor"/><path d="M3 4h18M3 20h12"/></symbol>
+    <symbol id="i-move" viewBox="0 0 24 24"><path d="m5 9-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20"/></symbol>
+    <symbol id="i-note" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></symbol>
+    <symbol id="i-doc" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></symbol>
+    <symbol id="i-compare" viewBox="0 0 24 24"><rect x="3" y="4" width="7" height="16" rx="1"/><rect x="14" y="4" width="7" height="16" rx="1"/><path d="M12 2v20"/></symbol>
+    <symbol id="i-feather" viewBox="0 0 24 24"><path d="M4 20 20 4M7 11h6v6M11 7h6v6"/></symbol>
     <symbol id="i-pen" viewBox="0 0 24 24"><path d="M12 19l7-7 3 3-7 7z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18z"/><path d="M2 2l7.6 7.6"/><circle cx="11" cy="11" r="2"/></symbol>
     <symbol id="i-eraser" viewBox="0 0 24 24"><path d="m7 21-4.3-4.3a1 1 0 0 1 0-1.4l10-10a1 1 0 0 1 1.4 0l5.6 5.6a1 1 0 0 1 0 1.4L11 21z"/><path d="M22 21H7M5 11l9 9"/></symbol>
     <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></symbol>
@@ -97,6 +107,10 @@
       <button data-tool="hand" data-tip="Scrivi con la calligrafia appresa  (H)"><svg><use href="#i-pen"/></svg><span>A mano</span></button>
       <button data-tool="erase" data-tip="Cancella un'area  (E)"><svg><use href="#i-eraser"/></svg><span>Gomma</span></button>
       <button data-tool="mark" data-tip="Segna una scritta che Calamo non ha riconosciuto: trascina un riquadro intorno  (R)"><svg><use href="#i-plus"/></svg><span>Segna scritta</span></button>
+      <button data-tool="annotate" data-tip="Evidenzia, sottolinea, barra, note e forme  (A)"><svg><use href="#i-marker"/></svg><span>Annota</span></button>
+      <button data-tool="insert" data-tip="Firma o immagine: clicca dove metterla  (F)"><svg><use href="#i-sign"/></svg><span>Firma</span></button>
+      <button data-tool="redact" data-tip="Oscura per sempre un'area: il testo sotto viene eliminato  (X)"><svg><use href="#i-redact"/></svg><span>Oscura</span></button>
+      <button data-tool="select" data-tip="Sposta, ridimensiona ed elimina firme, immagini, note e forme  (O)"><svg><use href="#i-move"/></svg><span>Oggetti</span></button>
     </div>
 
     <div class="tb-group right">
@@ -128,6 +142,38 @@
 
     <!-- Canvas -->
     <section class="stage" id="stage">
+      <div class="tool-opts" id="toolOpts" hidden>
+        <div class="opts" data-opts="annotate">
+          <div class="seg-switch" id="annKind">
+            <button data-k="highlight" class="active" title="Evidenzia il testo trascinato"><svg><use href="#i-marker"/></svg>Evidenzia</button>
+            <button data-k="underline" title="Sottolinea"><u>S</u>ottolinea</button>
+            <button data-k="strike" title="Barra"><s>Barra</s></button>
+            <button data-k="note" title="Nota: clicca dove lasciarla"><svg><use href="#i-note"/></svg>Nota</button>
+            <button data-k="rect" title="Rettangolo">▭</button>
+            <button data-k="ellipse" title="Ellisse">◯</button>
+            <button data-k="arrow" title="Freccia">➚</button>
+          </div>
+          <div class="swatches" id="annColors"></div>
+        </div>
+        <div class="opts" data-opts="insert">
+          <div class="seg-switch" id="insKind">
+            <button data-k="signature" class="active"><svg><use href="#i-sign"/></svg>Firma</button>
+            <button data-k="image"><svg><use href="#i-image"/></svg>Immagine</button>
+          </div>
+          <div class="sig-pick" id="sigPick"></div>
+          <button class="btn ghost sm" id="sigNew"><svg><use href="#i-pen"/></svg>Nuova firma…</button>
+          <span class="muted small" id="insHint">Clicca sulla pagina dove mettere la firma.</span>
+        </div>
+        <div class="opts" data-opts="redact">
+          <span class="muted small">Trascina sull'area da oscurare: testo e immagini sotto vengono eliminati davvero. Per cercare dati come codici fiscali o IBAN usa la scheda <b>Documento</b>.</span>
+        </div>
+        <div class="opts" data-opts="select">
+          <span class="muted small">Trascina per spostare, usa l'angolo per ridimensionare, <kbd>Canc</kbd> per eliminare. Doppio clic su una nota per scriverci.</span>
+          <button class="btn ghost sm" id="objReplace" disabled><svg><use href="#i-image"/></svg>Sostituisci immagine</button>
+          <button class="btn ghost sm" id="objCrop" disabled>Ritaglia</button>
+          <button class="btn ghost sm danger-text" id="objDelete" disabled><svg><use href="#i-trash"/></svg>Elimina</button>
+        </div>
+      </div>
       <div class="pages" id="pages"></div>
 
       <div class="findbar" id="findbar" hidden>
@@ -177,7 +223,9 @@
       <div class="tabs" id="tabs">
         <button data-tab="hand" class="active"><svg><use href="#i-pen"/></svg>Scrittura</button>
         <button data-tab="page"><svg><use href="#i-layers"/></svg>Pagina</button>
-        <button data-tab="settings"><svg><use href="#i-settings"/></svg>Impostazioni</button>
+        <button data-tab="doc"><svg><use href="#i-doc"/></svg>Documento</button>
+        <button data-tab="comments"><svg><use href="#i-note"/></svg>Commenti</button>
+        <button data-tab="settings" class="tab-icon" title="Impostazioni"><svg><use href="#i-settings"/></svg></button>
       </div>
 
       <div class="tab-body" data-panel="hand">
@@ -228,7 +276,22 @@
         <div class="card list-actions">
           <button class="row-btn" data-cmd="rotatePage" data-need-doc><svg><use href="#i-rotate"/></svg>Ruota di 90°</button>
           <button class="row-btn" data-cmd="insertPage" data-need-doc><svg><use href="#i-page-plus"/></svg>Inserisci pagina vuota dopo</button>
+          <button class="row-btn" data-cmd="duplicatePage" data-need-doc><svg><use href="#i-layers"/></svg>Duplica pagina</button>
           <button class="row-btn danger" data-cmd="deletePage" data-need-doc><svg><use href="#i-trash"/></svg>Elimina pagina</button>
+        </div>
+        <div class="section-title">Pagine del documento</div>
+        <div class="card form">
+          <p class="muted small">Trascina le miniature a sinistra per cambiare l'ordine delle pagine.</p>
+          <button class="btn ghost sm" data-cmd="mergePdf" data-need-doc><svg><use href="#i-plus"/></svg>Unisci altri PDF dopo questa pagina…</button>
+          <label>Pagine (es. 1-3, 5)<input id="pageSpec" placeholder="1-3, 5" spellcheck="false"></label>
+          <div class="row gap wrap">
+            <button class="btn ghost sm" data-cmd="extractPages" data-need-doc><svg><use href="#i-export"/></svg>Estrai in un nuovo PDF…</button>
+            <button class="btn ghost sm danger-text" data-cmd="deletePages" data-need-doc><svg><use href="#i-trash"/></svg>Elimina</button>
+          </div>
+          <div class="row gap">
+            <label class="grow">Dividi ogni<input id="splitEvery" type="number" min="1" value="1"></label>
+            <button class="btn ghost sm self-end" data-cmd="splitPdf" data-need-doc>pagine…</button>
+          </div>
         </div>
         <div class="section-title">Stile per il nuovo testo</div>
         <div class="card form">
@@ -250,6 +313,69 @@
           <div><kbd>Ctrl</kbd>+<kbd>Invio</kbd> Applica</div><div><kbd>Esc</kbd> Annulla</div>
           <div><kbd>Ctrl</kbd>+<kbd>F</kbd> Trova</div><div><kbd>Ctrl</kbd>+<kbd>Z</kbd> Annulla</div>
         </div>
+      </div>
+
+      <div class="tab-body" data-panel="doc" hidden>
+        <div class="section-title">Intestazione e numeri di pagina</div>
+        <div class="card form">
+          <label>Intestazione<input id="stHeader" placeholder="es. {file} – {data}" spellcheck="false"></label>
+          <label>Piè di pagina<input id="stFooter" value="Pagina {n} di {N}" spellcheck="false"></label>
+          <div class="row gap">
+            <label class="grow">Allineamento<select id="stAlign"><option value="center">Centro</option><option value="left">Sinistra</option><option value="right">Destra</option></select></label>
+            <label>Dimensione<input id="stSize" type="number" min="6" max="40" value="10"></label>
+          </div>
+          <div class="row gap">
+            <label class="grow">Pagine<input id="stPages" placeholder="tutte" spellcheck="false"></label>
+            <label>Inizia da<input id="stStart" type="number" min="0" value="1"></label>
+          </div>
+          <label>Filigrana<input id="stWatermark" placeholder="es. BOZZA, RISERVATO" spellcheck="false"></label>
+          <div class="row gap">
+            <label class="grow">Trasparenza<input id="stOpacity" type="range" min="5" max="60" value="18"></label>
+            <label>Colore<input id="stWmColor" type="color" value="#c0392b"></label>
+          </div>
+          <p class="muted small">Variabili: <b>{n}</b> pagina, <b>{N}</b> totale, <b>{data}</b> oggi, <b>{file}</b> nome del file.</p>
+          <button class="btn primary sm" data-cmd="stampPages" data-need-doc><svg><use href="#i-check"/></svg>Applica alle pagine</button>
+        </div>
+        <div class="section-title">Oscura dati sensibili</div>
+        <div class="card form">
+          <div class="checks" id="sensKinds">
+            <label><input type="checkbox" value="cf" checked> Codici fiscali</label>
+            <label><input type="checkbox" value="iban" checked> IBAN</label>
+            <label><input type="checkbox" value="email" checked> Email</label>
+            <label><input type="checkbox" value="phone" checked> Telefoni</label>
+            <label><input type="checkbox" value="card"> Carte di credito</label>
+          </div>
+          <label>Anche questo testo (es. un nome)<input id="sensTerm" spellcheck="false"></label>
+          <button class="btn ghost sm" data-cmd="findSensitive" data-need-doc><svg><use href="#i-search"/></svg>Cerca nel documento</button>
+          <div class="sens-list" id="sensList"></div>
+          <label class="check-row"><input type="checkbox" id="sensMeta" checked> Togli anche autore e proprietà del file</label>
+          <button class="btn primary sm danger-bg" data-cmd="redactSelected" id="redactBtn" disabled><svg><use href="#i-redact"/></svg>Oscura i selezionati</button>
+        </div>
+        <div class="section-title">Confronta con un'altra versione</div>
+        <div class="card form">
+          <button class="btn ghost sm" data-cmd="compare" data-need-doc><svg><use href="#i-compare"/></svg>Scegli il PDF da confrontare…</button>
+          <div class="cmp-list" id="cmpList"></div>
+        </div>
+        <div class="section-title">Alleggerisci e proteggi</div>
+        <div class="card form">
+          <div class="row gap">
+            <label class="grow">Qualità immagini<select id="optQuality"><option value="alta">Alta (stampa)</option><option value="media" selected>Media</option><option value="bassa">Bassa (email)</option></select></label>
+            <button class="btn ghost sm self-end" data-cmd="optimize" data-need-doc><svg><use href="#i-feather"/></svg>Salva copia leggera…</button>
+          </div>
+          <label>Password per aprire<input id="pwUser" type="password" autocomplete="new-password"></label>
+          <label>Password per modificare (facoltativa)<input id="pwOwner" type="password" autocomplete="new-password"></label>
+          <div class="checks">
+            <label><input type="checkbox" id="pwPrint" checked> Permetti la stampa</label>
+            <label><input type="checkbox" id="pwCopy"> Permetti di copiare il testo</label>
+            <label><input type="checkbox" id="pwEdit"> Permetti modifiche</label>
+          </div>
+          <button class="btn ghost sm" data-cmd="protect" data-need-doc><svg><use href="#i-lock"/></svg>Salva copia protetta…</button>
+        </div>
+      </div>
+
+      <div class="tab-body" data-panel="comments" hidden>
+        <div class="section-title">Commenti e segni <span class="muted" id="cmtCount"></span></div>
+        <div class="cmt-list" id="cmtList"><div class="empty small">Nessun commento. Usa lo strumento <b>Annota</b> per evidenziare o lasciare una nota.</div></div>
       </div>
 
       <div class="tab-body" data-panel="settings" hidden>
@@ -425,6 +551,24 @@
   </div>
 </div>
 
+<!-- Signature -->
+<div class="modal-back" id="sigModal" hidden>
+  <div class="modal sig-modal">
+    <h3>Nuova firma</h3>
+    <div class="seg-switch" id="sigMode">
+      <button data-m="draw" class="active"><svg><use href="#i-pen"/></svg>Disegna</button>
+      <button data-m="import"><svg><use href="#i-image"/></svg>Da una foto</button>
+    </div>
+    <div id="sigDrawBox">
+      <canvas id="sigCanvas" width="560" height="200"></canvas>
+      <div class="row gap between"><span class="muted small">Firma con il mouse o la penna.</span><button class="btn ghost sm" id="sigClear">Cancella</button></div>
+    </div>
+    <p class="muted small" id="sigImportBox" hidden>Scegli la foto o la scansione di una firma su carta bianca: Calamo toglie lo sfondo e tiene solo l'inchiostro.</p>
+    <label class="pop-label">Nome<input id="sigName" class="modal-input" value="La mia firma" spellcheck="false"></label>
+    <div class="modal-actions"><button class="btn ghost sm" id="sigCancel">Annulla</button><button class="btn primary sm" id="sigSave">Salva firma</button></div>
+  </div>
+</div>
+
 <!-- Progress -->
 <div class="busy" id="busy" hidden>
   <div class="busy-card">
@@ -437,5 +581,6 @@
 <div class="tip" id="tip" hidden></div>
 
 <script src="app.js"></script>
+<script src="tools.js"></script>
 </body>
 </html>

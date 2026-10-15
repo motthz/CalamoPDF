@@ -480,6 +480,57 @@ def test_remove_and_mark():
           new[0]["text"] if new else "nessuna riga")
 
 
+def test_editing():
+    """1.4 editing tools on Windows paths: pages, marks, signature, redaction, stamps, protect."""
+    import io
+    import pymupdf as fitz
+    from PIL import Image, ImageDraw
+    from engine.document import Session
+    tmp = tempfile.mkdtemp(prefix="calamo-edit-")
+    src = os.path.join(tmp, "contratto.pdf")
+    doc = fitz.open()
+    for i in range(3):
+        p = doc.new_page()
+        p.insert_text((72, 90), f"Pagina {i + 1}: Mario Rossi RSSMRA80A01H501U mario.rossi@example.com", fontsize=11)
+    doc.save(src)
+    other = os.path.join(tmp, "allegato.pdf")
+    d2 = fitz.open()
+    d2.new_page().insert_text((72, 90), "Allegato A", fontsize=14)
+    d2.save(other)
+    s = Session()
+    s.open(src)
+    s.merge_pdf(other, after=0)
+    s.move_page(1, 3)
+    order = [s.doc[i].get_text()[:9] for i in range(4)]
+    check("edit: merge and reorder pages", order[3].startswith("Allegato") and len(s.doc) == 4, str(order))
+    r = s.mark_text(0, [60, 75, 400, 95], "highlight", "#ffd400")
+    check("edit: highlight on text", any(o["type"] == "Highlight" for o in r["objects"]))
+    s.add_note(0, 500, 60, "Controllare", "#ffd400")
+    check("edit: comments listed", len(s.comments()) == 2)
+    img = Image.new("RGB", (400, 160), (238, 235, 228))
+    ImageDraw.Draw(img).line([(30, 120), (120, 40), (220, 120), (360, 50)], fill=(20, 20, 90), width=6)
+    buf = io.BytesIO()
+    img.save(buf, "JPEG")
+    s.save_signature("Prova", buf.getvalue(), clean=True)
+    r = s.place_signature(0, "Prova", 300, 700)
+    check("edit: signature placed", any(o["type"] == "signature" for o in r["objects"]))
+    hits = s.find_sensitive(["cf", "email"], "")
+    s.redact([{"page": h["page"], "bbox": h["bbox"]} for h in hits], True)
+    left = "".join(s.doc[i].get_text() for i in range(len(s.doc)))
+    check("edit: sensitive data really removed", "RSSMRA" not in left and "example.com" not in left, f"{len(hits)} hits")
+    s.stamp_pages({"footer": "Pagina {n} di {N}", "watermark": "BOZZA"})
+    check("edit: page numbers", "Pagina 4 di 4" in s.doc[3].get_text())
+    out = os.path.join(tmp, "protetto.pdf")
+    s.save_protected(out, "segreta", "", True, False, False)
+    d = fitz.open(out)
+    check("edit: password protected copy", d.needs_pass and d.authenticate("segreta") > 0)
+    light = os.path.join(tmp, "leggero.pdf")
+    r = s.save_optimized(light, "media")
+    check("edit: lighter copy opens", len(fitz.open(light)) == 4, f"{r['before']} -> {r['after']} byte")
+    cmp = s.compare_with(src)
+    check("edit: compare finds changes", cmp["changed"] >= 1, f"{cmp['changed']} di {cmp['total']}")
+
+
 def test_setup_script():
     import updater
     text = updater.build_script({"kind": "setup"}, r"C:\T\CalamoPDF-Setup.exe", True,
@@ -499,7 +550,7 @@ def test_release_check():
 
 if __name__ == "__main__":
     for t in (test_ocr, test_writings, test_skewed_scan, test_handreader, test_reader_in_analysis, test_table_form, test_rewrite_keeps_background, test_remove_and_mark,
-              test_rotated_page_edit, test_portable_swap, test_setup_script, test_release_check):
+              test_rotated_page_edit, test_editing, test_portable_swap, test_setup_script, test_release_check):
         try:
             t()
         except Exception as e:
