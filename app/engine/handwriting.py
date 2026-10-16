@@ -42,6 +42,10 @@ HAND_FONTS = [("Inkfree.ttf", None), ("segoepr.ttf", "segoeprb.ttf"), ("segoesc.
               ("FreeSansOblique.ttf", "FreeSansBoldOblique.ttf"), ("FreeSerifItalic.ttf", "FreeSerifBoldItalic.ttf"),
               ("DejaVuSans-Oblique.ttf", "DejaVuSans-BoldOblique.ttf")]
 SAME_SHAPE = set("cosuvwxzpk")
+# set by the app: a function giving the handwriting reader (or None). With it, a rewritten
+# line is composed a few ways and the one the reader reads best is used
+REWRITE_READER = None
+RELIABLE_DOUBT = 0.45        # most doubt a line read by the model may have to teach its letters
 ACCENTS = {"à": ("a", "grave"), "è": ("e", "grave"), "é": ("e", "acute"), "ì": ("i", "grave"),
            "ò": ("o", "grave"), "ù": ("u", "grave"), "á": ("a", "acute"), "í": ("i", "acute"),
            "ó": ("o", "acute"), "ú": ("u", "acute"), "È": ("E", "grave"), "À": ("A", "grave")}
@@ -306,13 +310,52 @@ class HandwritingLibrary:
             if not self.glyphs[ch]:
                 del self.glyphs[ch]
 
-    def learn_line(self, page, line, src=None):
+    @staticmethod
+    def reliable(line):
+        """Can the letters of this line be learned? Only when its reading is sure: what the
+        user typed, or a reading neither the OCR nor the handwriting model doubts. A wrong
+        reading would store letters under the wrong names."""
+        if line.get("synthetic") or line.get("source") == "unread":
+            return False
+        if line.get("source") == "user":
+            return True
+        return line.get("doubt", 0) <= (0.4 if line.get("source") == "ocr" else RELIABLE_DOUBT)
+
+    def learn_lines(self, page, items):
+        """Learn a writing from all its lines [(line, src)]. Each line is measured first: a
+        line whose size disagrees with the others (a dense cell where the measure caught
+        the lines above and below) would teach letters at the wrong scale, so it is skipped."""
+        self.clear()
+        # sure lines teach every word; the others only the words that are surely right
+        good = [(l, j) for l, j in items if self.reliable(l)]
+        metrics = {}
+        for l, j in good:
+            try:
+                metrics[j] = measure_line(page, l["bbox"], l["text"])
+            except Exception:
+                pass
+        xhs = [m[1] for m in metrics.values()]
+        med = float(np.median(xhs)) if len(xhs) >= 4 else None
+        hs = [l["bbox"][3] - l["bbox"][1] for l, _ in good]
+        med_h = float(np.median(hs)) if len(hs) >= 4 else None
+        for l, j in good:
+            m = metrics.get(j)
+            if l.get("source") != "user":
+                if med and m and not (0.65 <= m[1] / med <= 1.5):
+                    continue
+                h = l["bbox"][3] - l["bbox"][1]
+                if (med_h and h > med_h * 1.7) or _rows(page, l["bbox"]) > 1:
+                    continue           # two lines of a cell read as one: its letters would mix them
+            self.learn_line(page, l, j, m)
+        self._prune()
+
+    def learn_line(self, page, line, src=None, metrics=None):
         """line: ink line dict with 'words' (text,bbox) and corrected 'text'."""
         if src is not None:
             self.forget(src)
         self._trusted_line = line.get("source") == "user"
-        if line.get("synthetic") or line.get("source") == "unread" or \
-                (line.get("source") == "ocr" and line.get("doubt", 0) > 0.4):
+        sure = self.reliable(line)
+        if not sure:
             return
         words = line["words"]
         labels = line["text"].split()
@@ -329,12 +372,12 @@ class HandwritingLibrary:
         except Exception:
             _LINES.pop(id(page), None)
         try:
-            self._learn_line(page, line, lrect, labels, words, src)
+            self._learn_line(page, line, lrect, labels, words, src, metrics)
         finally:
             _LINES.pop(id(page), None)
 
-    def _learn_line(self, page, line, lrect, labels, words, src):
-        base, xh = measure_line(page, lrect, line["text"])
+    def _learn_line(self, page, line, lrect, labels, words, src, metrics=None):
+        base, xh = metrics or measure_line(page, lrect, line["text"])
         self.heights.append(lrect.height)
         self.xhs.append(xh)
         for a, b in zip(words, words[1:]):
@@ -430,6 +473,50 @@ class HandwritingLibrary:
             segs = new
         return segs, quality
 
+    def _split_word(self, ink, label, X):
+        """Letter columns of a word: the gaps between separate letters when there are as
+        many as letters, else the best cuts for joined writing (see _dp_split)."""
+        segs, quality = self._split(ink, len(label), X * 2.2)
+        if len(segs) == len(label) and quality == 1.0 and _widths_plausible(label, segs):
+            return segs, 1.0
+        dp = _dp_split(ink, label, X, self._char_widths())
+        if dp is not None:
+            return dp
+        return segs, (0.5 if quality == 1.0 and len(segs) == len(label) else quality)
+
+    def _char_widths(self):
+        """Width (x-heights) of the letters this writer wrote clearly, and the user marked."""
+        cache = self.__dict__.get("_cw")
+        n = sum(len(v) for v in self.glyphs.values()) + sum(len(v) for v in self.manual.values())
+        if cache and cache[0] == n:
+            return cache[1]
+        out = {}
+        for ch in set(self.glyphs) | set(self.manual):
+            ws = [g.width for g in self.manual.get(ch, [])] or \
+                 [g.width for g in self.glyphs.get(ch, []) if g.quality >= 1.0]
+            if ws:
+                out[ch] = float(np.median(ws))
+        self._cw = (n, out)
+        return out
+
+    def _prune(self):
+        """Drop the automatic samples of a letter that look like no other sample of it (or
+        like none of the letters the user marked): a wrong cut, a letter misread."""
+        for ch, bucket in list(self.glyphs.items()):
+            refs = self.manual.get(ch) or []
+            if len(bucket) < 3 and not refs:
+                continue
+            desc = [_describe(g) for g in bucket]
+            if refs:
+                ref = [_describe(g) for g in refs]
+                d = np.array([min(np.abs(x - r).mean() for r in ref) for x in desc])
+            else:
+                d = np.array([np.median([np.abs(x - y).mean() for y in desc]) for x in desc])
+            limit = max(float(np.median(d)) * 1.5, 0.12)
+            keep = [g for g, v in zip(bucket, d) if v <= limit]
+            if keep:
+                self.glyphs[ch] = keep
+
     def _learn_word(self, page, rect, label, src=None, line=None, metrics=None):
         """Letters of one word. Their size and position are measured against the whole LINE
         (not the word box, which is short for "euro" and tall for "Totale"), so all letters
@@ -451,11 +538,14 @@ class HandwritingLibrary:
             self.inks.append(core.mean(axis=0).tolist())
         base, xh = metrics or (ref.y0 + Hw * 0.78, Hw * 0.45)
         base_px, X = (base - clip.y0) * S, max(xh * S, 2)
-        segs, quality = self._split(ink, len(label), X * 2.2)
+        if self.kind == "print":
+            segs, quality = self._split(ink, len(label), X * 2.2)
+            if quality == 1.0 and not _widths_plausible(label, segs):
+                quality = 0.5          # as many pieces as letters, but not those letters
+        else:
+            segs, quality = self._split_word(ink, label, X)
         if len(segs) != len(label):
             return
-        if quality == 1.0 and not _widths_plausible(label, segs):
-            quality = 0.5          # as many pieces as letters, but not those letters
         if self.kind == "print" and quality < 1.0:
             return            # print letters are separate: a forced cut means the labels would be wrong
         if quality == 1.0:
@@ -467,7 +557,7 @@ class HandwritingLibrary:
             self.words.append({"text": label, "alpha": _body_only(alpha, ink, strokes, base_px, X)[:, a0:segs[-1][1]].copy(),
                                "base": base_px, "X": X,
                                "segs": [(a - a0, b - a0, jl, jr) for a, b, jl, jr in segs], "src": src,
-                               "exact": quality == 1.0})
+                               "exact": quality >= 0.7})
         for ch, (a, b, jl, jr) in zip(label, segs):
             g = self._cut(ink, alpha, a, b, base_px, X, jl, jr, src,
                           quality if (jl or jr) else max(quality, 0.8), labels=strokes)
@@ -509,7 +599,8 @@ class HandwritingLibrary:
             for k in np.unique(lab[:, a:b][col_ink]):
                 x0, x1, total, y0, y1 = stats[k]
                 inside = int((lab[:, a:b] == k).sum())
-                if (inside < total * 0.3 and x1 - x0 < (b - a) * 2.2) or y1 < band0 or y0 > band1:
+                border = (y1 - y0) >= ink.shape[0] * 0.9 and x1 - x0 < X * 0.6
+                if (inside < total * 0.3 and x1 - x0 < (b - a) * 2.2) or y1 < band0 or y0 > band1 or border:
                     # a stroke of the next letter, or something above / below the line
                     # (the small print of a form, a mark): not part of this letter
                     keep &= lab[:, a:b] != k
@@ -870,9 +961,49 @@ class HandwritingLibrary:
                  or (c in ACCENTS and self._known(ACCENTS[c][0])))
         return ok / len(chars)
 
-    def render(self, text, xh_pt, color=None, seed=None, max_width_pt=None):
+    def render_best(self, text, xh_pt, color=None, max_width_pt=None):
+        """Like render, but for handwriting a few compositions are tried (other shapes of
+        the letters; letter by letter instead of reusing pieces of words) and the one the
+        handwriting reader reads back closest to text wins. The choice is remembered, so the
+        preview and the page get the same one."""
+        reader = REWRITE_READER() if REWRITE_READER else None
+        if reader is None or self.kind == "print" or not text.strip() or len(text) > 80:
+            return self.render(text, xh_pt, color, max_width_pt=max_width_pt)
+        from .quality import legibility
+        sig = (sum(len(v) for v in self.glyphs.values()), sum(len(v) for v in self.manual.values()),
+               len(self.words), self.loaded_name)
+        cache = self.__dict__.setdefault("_best", {})
+        key = (text, sig)
+        if key in cache:
+            seed, words, sure = cache[key]
+            return self.render(text, xh_pt, color, seed=seed, max_width_pt=max_width_pt, words=words, sure=sure)
+        best = None
+        # the writer's own letters first; letters it wrote unclearly from the font last
+        for seed, words, sure in ((None, True, False), (1, True, False), (None, False, False), (None, True, True)):
+            if not words and not self.words:
+                continue
+            if sure and best is not None and best[0] <= 0.25:
+                break                         # already readable with the writer's letters
+            r = self.render(text, 9.0, None, seed=seed, words=words, sure=sure)
+            if not r:
+                continue
+            c, _ = legibility(r["png"], text, reader)
+            if best is None or c < best[0] - (0.08 if sure else 1e-6):
+                best = (c, seed, words, sure)
+            if c == 0:
+                break
+        if best is None:
+            return self.render(text, xh_pt, color, max_width_pt=max_width_pt)
+        if len(cache) > 200:
+            cache.clear()
+        cache[key] = best[1:]
+        return self.render(text, xh_pt, color, seed=best[1], max_width_pt=max_width_pt, words=best[2], sure=best[3])
+
+    def render(self, text, xh_pt, color=None, seed=None, max_width_pt=None, words=True, sure=False):
         """Compose text with an x-height of xh_pt. Returns dict(png, width_pt, height_pt,
-        top_offset_pt): the image top is top_offset_pt from the baseline (negative = above)."""
+        top_offset_pt): the image top is top_offset_pt from the baseline (negative = above).
+        words=False: letter by letter, without reusing pieces of words already written.
+        sure=True: letters this writing has no clear sample of come from the font."""
         rnd = random.Random(seed if seed is not None else hash(text) & 0xFFFF)
         printed = self.kind == "print"
         color = color or self.ink_color()
@@ -885,7 +1016,7 @@ class HandwritingLibrary:
                  (np.median(widths) * 0.75 if widths else 0.7)) * Hpx
         gap_ref = float(np.median(self.gaps)) if len(self.gaps) >= 3 else 0.15
         prev_join, prev = False, None
-        for unit in self._units(text, rnd):
+        for unit in self._units(text, rnd, words):
             if unit == " ":
                 x += space * (1.0 if printed else rnd.uniform(0.9, 1.15))
                 prev_join, prev = False, None
@@ -898,7 +1029,7 @@ class HandwritingLibrary:
                 ch = unit
                 g = None
             if g is None:
-                g, accent, case_scale = self._letter(ch, rnd, last, printed, Hpx, prev)
+                g, accent, case_scale = self._letter(ch, rnd, last, printed, Hpx, prev, sure)
                 if g is None:
                     x += space
                     continue
@@ -926,12 +1057,17 @@ class HandwritingLibrary:
             return None
         return self._finish(placed, x, Hpx, color, max_width_pt)
 
-    def _letter(self, ch, rnd, last, printed, Hpx, prev=None):
+    def _letter(self, ch, rnd, last, printed, Hpx, prev=None, sure=False):
         """The glyph for one character: learned, accented, case-swapped or font-drawn.
         After a joined letter, the variant whose stroke starts where the previous one
-        ended is preferred, so the join looks written in one go."""
+        ended is preferred, so the join looks written in one go.
+        sure: only letters marked by the user or learned cleanly at least twice."""
         accent = None
         variants = self._variants(ch)
+        if sure and variants and not self.manual.get(ch):
+            variants = [v for v in variants if v.quality >= 0.7]
+            if len(variants) < 2:
+                variants = None
         if not variants and ch in ACCENTS and self._known(ACCENTS[ch][0]):
             variants = self._variants(ACCENTS[ch][0])
             accent = ACCENTS[ch][1]
@@ -964,7 +1100,7 @@ class HandwritingLibrary:
         last[ch] = idx
         return variants[idx], accent, case_scale
 
-    def _units(self, text, rnd):
+    def _units(self, text, rnd, words=True):
         """Split text into what to draw: spaces, whole pieces of words this writer already
         wrote (longest first: they keep the real joins between letters) and single letters."""
         out = []
@@ -973,7 +1109,7 @@ class HandwritingLibrary:
                 out.append(" ")
             i = 0
             while i < len(word):
-                piece = self._piece(word, i, rnd)
+                piece = self._piece(word, i, rnd) if words else None
                 if piece:
                     g, n = piece
                     out.append(g)
@@ -1049,7 +1185,9 @@ def _body_only(alpha, ink, strokes, base_px, X):
     form, a mark in the margin)."""
     lab, stats = strokes
     band0, band1 = base_px - X * 1.05, base_px + X * 0.15
-    away = [k for k, st in stats.items() if st[4] < band0 or st[3] > band1]
+    H = alpha.shape[0]
+    away = [k for k, st in stats.items() if st[4] < band0 or st[3] > band1
+            or (st[4] - st[3] >= H * 0.9 and st[1] - st[0] < X * 0.6)]      # a border of the table
     if not away:
         return alpha
     drop = np.isin(lab, away)
@@ -1062,7 +1200,7 @@ def _solid(g, ch):
     """A letter or digit has a body: at least about half an x-height tall (an "x"), and
     some ink. Specks of the scan or shreds of a cut do not."""
     h = g.bottom - g.top                       # in x-heights
-    if h < (0.55 if ch.isalpha() and ch.islower() and ch not in "ilj" else 0.75) or h > 4.5:
+    if h < (0.55 if ch.isalpha() and ch.islower() and ch not in "ilj" else 0.75) or h > 3.4:
         return False
     if not 0.12 <= g.width <= 3.0:
         return False
@@ -1081,6 +1219,118 @@ def _widths_plausible(label, segs):
     got = np.array([max(s[1] - s[0], 1) for s in segs], dtype=np.float64)
     ratio = (got / got.sum()) / (exp / exp.sum())
     return bool(ratio.min() > 0.33 and ratio.max() < 2.6)
+
+
+def _rows(page, bbox):
+    """How many lines of writing a box holds (bands of ink one above the other)."""
+    try:
+        r = fitz.Rect(bbox) & page.rect
+        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=r, alpha=False)
+        g = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3].mean(axis=2)
+        ink = g < min(float(np.percentile(g, 92)) - 45, 200)
+        # long rules (a table border) are not writing
+        ink[ink.mean(axis=1) > 0.6] = False
+        prof = np.convolve(ink.sum(axis=1).astype(float), np.ones(3) / 3, mode="same")
+        if prof.max() <= 0:
+            return 0
+        on = prof > prof.max() * 0.12
+        bands, start = [], None
+        for i, v in enumerate(on):
+            if v and start is None:
+                start = i
+            elif not v and start is not None:
+                bands.append((start, i))
+                start = None
+        if start is not None:
+            bands.append((start, len(on)))
+        mass = [prof[a:b].sum() for a, b in bands]
+        big = [m for m in mass if m >= max(mass) * 0.3]
+        return len(big)
+    except Exception:
+        return 1
+
+
+def _describe(g):
+    """A letter as a few numbers: its shape on a 12 x 12 grid, its proportions and where
+    it sits on the line."""
+    a = np.asarray(Image.fromarray(g.alpha).resize((12, 12), Image.BILINEAR), np.float32) / 255.0
+    return np.concatenate([a.ravel(), [g.width / 2, (g.bottom - g.top) / 3, g.top / 3, g.bottom / 3] * 6])
+
+
+def _dp_split(ink, label, X, learned=None):
+    """Cut a word of joined writing into its letters. Every way of placing the cuts is
+    weighed at once (dynamic programming): a cut costs the ink it crosses (nothing in a
+    gap between letters), and each letter costs how far its width is from the width that
+    letter has (as this writer wrote it, else as it is in a common typeface). Returns
+    ([a, b, join_left, join_right]...), quality, or None."""
+    n = len(label)
+    cols = np.where(ink.any(axis=0))[0]
+    if n == 0 or not len(cols):
+        return None
+    a0, a1 = int(cols[0]), int(cols[-1]) + 1
+    W = a1 - a0
+    if n == 1:
+        return [[a0, a1, False, False]], 1.0
+    if W < n * 2:
+        return None
+    prof = ink[:, a0:a1].sum(axis=0).astype(np.float64)
+    prof = np.convolve(prof, np.ones(3) / 3, mode="same")
+    cost_cut = np.minimum(prof / max(np.percentile(prof, 90), 1), 1.5)
+    cost_cut[prof == 0] = 0.0
+    ref = fitz.Font("helv")
+    rel = []
+    for c in label:
+        if learned and c in learned:
+            rel.append(learned[c] * 0.52)            # x-heights -> size of a common typeface
+        else:
+            rel.append(max(ref.text_length(c, fontsize=1), 0.2))
+    rel = np.array(rel)
+    exp = rel / rel.sum() * W
+    INF = 1e18
+    # D[k][x]: best cost with the k-th cut at column x (cut 0 at 0, cut n at W)
+    D = np.full((n + 1, W + 1), INF)
+    back = np.zeros((n + 1, W + 1), np.int32)
+    D[0, 0] = 0.0
+    xs = np.arange(W + 1)
+    cc = np.concatenate([cost_cut, [0.0]])
+    for k in range(1, n + 1):
+        e = exp[k - 1]
+        lo, hi = max(int(e * 0.3), 1), max(int(e * 2.8), 2)
+        prev = D[k - 1]
+        targets = [W] if k == n else range(1, W)
+        for x in targets:
+            s0, s1 = max(x - hi, 0), x - lo
+            if s1 < s0:
+                continue
+            w = x - xs[s0:s1 + 1]
+            c = prev[s0:s1 + 1] + 0.8 * ((w - e) / e) ** 2
+            j = int(np.argmin(c))
+            v = c[j] + (cc[x] * 1.0 if k < n else 0.0)
+            if v < D[k, x]:
+                D[k, x], back[k, x] = v, s0 + j
+    if D[n, W] >= INF:
+        return None
+    cuts = [W]
+    for k in range(n, 0, -1):
+        cuts.append(int(back[k, cuts[-1]]))
+    cuts = cuts[::-1]
+    segs = []
+    joined = 0
+    for k in range(n):
+        a, b = a0 + cuts[k], a0 + cuts[k + 1]
+        jl = k > 0 and prof[cuts[k] - 1 if cuts[k] > 0 else 0] > 0
+        jr = k < n - 1 and prof[min(cuts[k + 1], W - 1)] > 0
+        part = np.where(ink[:, a:b].any(axis=0))[0]
+        if not len(part):
+            return None
+        # tight to the ink where the letter stands alone; a joined side stays at the cut
+        a, b = (a if jl else a + int(part[0])), (b if jr else a0 + cuts[k] + int(part[-1]) + 1)
+        segs.append([a, b, bool(jl), bool(jr)])
+        joined += jr
+    widths = np.array([s[1] - s[0] for s in segs], np.float64)
+    fit = float(np.mean(np.abs(widths - exp) / exp))
+    quality = 1.0 if joined == 0 and fit < 0.45 else (0.7 if fit < 0.45 else 0.5)
+    return segs, quality
 
 
 # --------------------------------------------------------------------------- the writings of a page

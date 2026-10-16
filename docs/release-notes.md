@@ -1,4 +1,26 @@
-## Novità di Calamo PDF Studio 1.4.1
+## Novità di Calamo PDF Studio 1.4.2
+
+**Trascina qualsiasi elemento della pagina.** Con lo strumento *Modifica* (o *Oggetti*) si prende e si sposta ogni cosa, non solo le scritte:
+- **disegni e tabelle** fatti di linee e riquadri: la tabella si prende dal bordo e si porta dietro tutto il suo testo, che resta modificabile;
+- **immagini** e **campi dei moduli** compilabili;
+- **note, forme, firme e timbri** anche senza cambiare strumento;
+- sulle **scansioni**, la grafica dell'immagine (un timbro, un logo, un riquadro, una linea): Calamo la stacca dalla carta, ricostruisce la carta sotto (con la sua grana) e la riappoggia dove la lasci, con i suoi colori.
+Funzionano anche le guide magnetiche, l'allineamento di più elementi (Maiusc+clic) e Ctrl+Z.
+
+**Riscrittura a mano più leggibile sui moduli difficili.**
+- Calamo ora **misura** quanto è leggibile ciò che riscrive: il lettore della scrittura a mano rilegge la frase composta e la confronta con quella chiesta. Fra alcune composizioni possibili sceglie quella che si legge meglio (anche per l'anteprima).
+- **Impara solo dalle righe sicure**: una riga che il lettore e l'OCR leggono in modo diverso, o misurata male (due righe di una cella fitta lette come una), non insegna più lettere sbagliate.
+- Le righe di una cella fitta che l'OCR leggeva come una sola vengono **separate** e lette una per una.
+- Le linee della tabella che attraversano le lettere non finiscono più dentro le lettere imparate.
+- **Corsivo legato**: i tagli tra le lettere sono scelti tutti insieme, tenendo conto della larghezza di ogni lettera (come la scrive quella persona, o come la segni tu con *Segna lettere*) e di dove passa meno inchiostro. Gli esempi di una lettera molto diversi dagli altri (o da quelli segnati da te) vengono scartati.
+- La stessa persona non viene più divisa in tante "scritture" per poche righe scritte un po' diverse.
+- Sui cinque moduli reali di prova l'errore di rilettura delle frasi riscritte scende in media da 0,50 a circa 0,35 (0 = letta perfettamente). I moduli scritti in fretta e molto fitti restano i più difficili: lì *Segna lettere* fa la differenza.
+
+**Stampato o a mano: decidi tu nei casi dubbi.** Se alcune righe sembrano stampate dentro una scrittura a mano (o il contrario), il pannello *Scrittura* lo segnala con **Mostra**, **Separa** e **Vanno bene così**.
+
+**Controlli su Windows reale.** I test automatici ora provano anche il trascinamento col mouse vero (anche delle pagine fra due documenti affiancati), la traduzione online, la stampa in PDF con Word dove c'è e le voci di sistema per la lettura ad alta voce.
+
+## Calamo PDF Studio 1.4.1
 
 **Un aspetto più sobrio e professionale.**
 - Niente più pulsanti dorati con sfumature e aloni luminosi: il pulsante principale è a tinta unita (chiaro sul tema scuro, scuro sul tema chiaro), gli altri sono piatti con bordi sottili.

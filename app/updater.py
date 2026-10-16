@@ -41,7 +41,11 @@ def installed():
 
 def check(current):
     """Return info about a newer release, or None."""
-    req = urllib.request.Request(LATEST, headers={"User-Agent": UA, "Accept": "application/vnd.github+json"})
+    headers = {"User-Agent": UA, "Accept": "application/vnd.github+json"}
+    token = os.environ.get("CALAMO_GITHUB_TOKEN")
+    if token:             # the automatic tests: shared machines soon hit the anonymous limit
+        headers["Authorization"] = "Bearer " + token
+    req = urllib.request.Request(LATEST, headers=headers)
     with urllib.request.urlopen(req, timeout=15) as r:
         data = json.load(r)
     if data.get("draft") or data.get("prerelease"):

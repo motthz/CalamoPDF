@@ -346,6 +346,7 @@ def read_page(job, learning, lang_tag=None, reader=None, lexicon=None, prefer=No
                            "doubt": 1.0, "synthetic": False})
     except Exception:
         pass
+    result = _split_tall(result, rgb, zoom)
     for l in result:
         _measure(l, rgb, zoom)
     if reader is not None:
@@ -411,6 +412,45 @@ def read_region(job, rects, learning, lang_tag=None, reader=None, lexicon=None, 
             if learned:
                 l["source"] = "learned"
             out.append(l)
+    return out
+
+
+def _split_tall(lines, rgb, zoom):
+    """A box the OCR drew around two or three lines of a crowded cell (it happens with
+    handwriting) is cut into its lines, each with its own words: the reader reads one line
+    at a time, and the letters of a line must not mix with those of the next."""
+    hs = sorted(l["bbox"][3] - l["bbox"][1] for l in lines)
+    if len(hs) < 5:
+        return lines
+    med = float(np.median(hs))
+    out = []
+    for l in lines:
+        x0, y0, x1, y1 = l["bbox"]
+        if y1 - y0 < med * 1.6:
+            out.append(l)
+            continue
+        X0, Y0 = int(x0 * zoom), int(y0 * zoom)
+        crop = rgb[Y0:int(y1 * zoom), X0:int(x1 * zoom)]
+        if crop.size == 0:
+            out.append(l)
+            continue
+        mask = WR.ink_mask(crop)
+        mask &= ~WR.rules(mask, max(int(10 * zoom), 4), chain=3, chain_h=6)
+        rows = WR.split_rows(mask, (0, 0, mask.shape[1], mask.shape[0]), med * zoom * 0.8)
+        if len(rows) < 2:
+            out.append(l)
+            continue
+        for rx0, ry0, rx1, ry1 in rows:
+            top, bot = y0 + ry0 / zoom, y0 + ry1 / zoom
+            ws = [w for w in l["words"] if top <= (w["bbox"][1] + w["bbox"][3]) / 2 < bot]
+            cols = np.where(mask[ry0:ry1].any(axis=0))[0]
+            if not len(cols):
+                continue
+            box = [x0 + cols[0] / zoom, top, x0 + (cols[-1] + 1) / zoom, bot]
+            raw = " ".join(w["text"] for w in ws)
+            out.append({"bbox": box, "raw": raw, "text": raw, "words": ws,
+                        "source": "ocr" if ws else "unread", "doubt": _doubt(raw) if ws else 1.0,
+                        "synthetic": False})
     return out
 
 
@@ -506,6 +546,10 @@ def _second_opinion(line, crop, zoom, reader, lexicon, prefer):
         if best_q is None or q > best_q:
             best, best_q = (fixed, src, conf, ratio), q
     text, src, conf, ratio = best
+    # two readers that disagree: whichever won, the reading is not sure
+    if len(options) == 2:
+        from .quality import cer
+        line["agree"] = round(1 - cer(options[0][0], options[1][0]), 2)
     if line["source"] == "unread" and src == "model" and (conf or 0) < 0.3:
         return                                  # the model is guessing: leave it unread
     if text != line["raw"]:
@@ -516,6 +560,8 @@ def _second_opinion(line, crop, zoom, reader, lexicon, prefer):
     if conf is not None:
         doubt = max(doubt, 1 - conf) if src == "model" else doubt
     if lexicon and ratio < 0.5:
+        doubt = max(doubt, 0.5)
+    if line.get("agree") is not None and line["agree"] < 0.6:
         doubt = max(doubt, 0.5)
     line["doubt"] = round(min(doubt, 1.0), 2)
 

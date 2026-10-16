@@ -82,16 +82,19 @@ class ExtrasMixin:
     # ================================================================== several elements at once
     def arrange(self, index, moves):
         """Move several elements in one step (align, distribute): moves = [{kind: 'obj' |
-        'blk' | 'ink', id, src, bbox / rect, dx, dy}]. One undo for all."""
+        'blk' | 'ink' | 'gfx', id, src, bbox / rect, dx, dy}] (gfx: an element of graphics()). One undo for all."""
         with self.lock:
             moves = [m for m in moves if abs(float(m.get("dx", 0))) + abs(float(m.get("dy", 0))) > 0.3]
             if not moves:
                 return self.blocks(index)
             self._checkpoint(index)
             # pictures and marks last: rewriting text never touches them
-            for m in sorted(moves, key=lambda m: {"ink": 0, "blk": 1, "obj": 2}.get(m["kind"], 3)):
+            for m in sorted(moves, key=lambda m: {"gfx": 0, "ink": 1, "blk": 2, "obj": 3}.get(m["kind"], 4)):
                 dx, dy = float(m["dx"]), float(m["dy"])
-                if m["kind"] == "blk":
+                if m["kind"] == "gfx":
+                    self.move_graphic(index, {"kind": m.get("gkind"), "bbox": m["bbox"], "xref": m.get("xref")},
+                                      dx, dy, checkpoint=False)
+                elif m["kind"] == "blk":
                     self.move_block(index, m["bbox"], dx, dy, checkpoint=False)
                 elif m["kind"] == "ink":
                     self.move_ink(index, m["id"], dx, dy, checkpoint=False)
@@ -439,7 +442,9 @@ class ExtrasMixin:
                 import io as _io
                 buf = _io.BytesIO()
                 Image.new("RGB", (2, 2), tuple(int(v * 255) for v in paper)).save(buf, "PNG")
-                page.insert_image(_unrot(page, band), stream=buf.getvalue(), keep_proportion=False, overlay=True)
+                xref = page.insert_image(_unrot(page, band), stream=buf.getvalue(), keep_proportion=False, overlay=True)
+                from .graphics import tag_image
+                tag_image(self.doc, xref, "Cover")
                 self._shift_below(index, page, t, -h)
             self._touch(index)
             ts = self._find_tables(index)

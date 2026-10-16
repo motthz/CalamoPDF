@@ -147,6 +147,27 @@ def group(feats, threshold=1.0, boxes=None):
         groups[i] += groups.pop(j)
         cents.pop(j)
         cents[i] = _mean([feats[k] for k in groups[i]])
+    # a few lines that came out a little different from a big writing in the same pen (a
+    # hurried line, a crowded cell) are the same person, not another one
+    if n >= 8:
+        small = max(2, int(n * 0.15))
+        changed = True
+        while changed and len(groups) > 1:
+            changed = False
+            big = [i for i, g in enumerate(groups) if len(g) > small]
+            for i, g in enumerate(groups):
+                if len(g) > small or not big:
+                    continue
+                c = cents[i]
+                j = min(big, key=lambda b: distance(c, cents[b]))
+                f = cents[j]
+                if (distance(c, f) < threshold * 2.2 and _colour_dist(c["ink"], f["ink"]) < 30
+                        and abs(c["hand"] - f["hand"]) < 0.45):
+                    groups[j] += groups.pop(i)
+                    cents.pop(i)
+                    cents[j - (1 if i < j else 0)] = _mean([feats[k] for k in groups[j - (1 if i < j else 0)]])
+                    changed = True
+                    break
     out = [0] * n
     # biggest writing first
     for gi, members in enumerate(sorted(groups, key=lambda g: -len(g))):

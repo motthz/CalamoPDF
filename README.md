@@ -32,7 +32,7 @@
 | 🌍 **Traduci** | Copia tradotta con la stessa impaginazione, anche delle parti scritte a mano. |
 | 🔊 **Leggi e presenta** | Lettura ad alta voce con le voci di Windows e presentazione a schermo intero. |
 | 📚 **Unisci e dividi PDF** | Unisci più PDF interi (anche solo alcune pagine di ciascuno) in un nuovo file con un segnalibro per file; dividi un PDF ogni N pagine, per intervalli, una pagina per file, per capitoli o per dimensione. |
-| ✋ **Prendi e trascina** | Trascina testi (con il loro carattere), scritte delle scansioni (solo le lettere, lo sfondo resta), firme, immagini, note e forme. |
+| ✋ **Prendi e trascina** | Trascina ogni elemento della pagina: testi (con il loro carattere), tabelle e disegni (col loro testo), immagini, campi dei moduli, firme, note e forme; sulle scansioni anche scritte e grafica (timbri, loghi, riquadri), con la carta ricostruita sotto. |
 | 📑 **Pagine** | Riordina trascinando le miniature, inserisci altri PDF, duplica, estrai pagine in un nuovo file. |
 | 🖍️ **Annota** | Evidenzia, sottolinea e barra (anche la scrittura a mano letta), note, rettangoli, ellissi e frecce; tutti elencati nella scheda *Commenti*. |
 | ✒️ **Firma e immagini** | Disegna la firma o prendila da una foto (lo sfondo viene tolto), inserisci immagini; sposta, ridimensiona, ritaglia e sostituisci. |
@@ -57,7 +57,7 @@ Requisiti: Windows 10/11 a 64 bit con WebView2 (già presente su Windows 11). Pe
 
 | Strumento | Tasto | |
 |---|---|---|
-| Modifica | `M` | Clicca un blocco di testo per modificarlo; `Ctrl+Invio` applica, `Esc` annulla. Clicca una riga scritta a mano per correggerne la lettura o riscriverla. Trascina un testo o una scritta per spostarli. |
+| Modifica | `M` | Clicca un blocco di testo per modificarlo; `Ctrl+Invio` applica, `Esc` annulla. Clicca una riga scritta a mano per correggerne la lettura o riscriverla. Trascina un testo, una scritta, una tabella (dal bordo), un disegno, un'immagine o un campo per spostarli. |
 | Testo | `T` | Clicca un punto della pagina e scrivi nuovo testo. |
 | A mano | `H` | Clicca e scrivi: il testo viene composto con la calligrafia appresa dal documento. |
 | Gomma | `E` | Trascina per cancellare un'area (utile sulle scansioni). |
@@ -65,7 +65,7 @@ Requisiti: Windows 10/11 a 64 bit con WebView2 (già presente su Windows 11). Pe
 | Annota | `A` | Trascina sul testo per evidenziare, sottolineare o barrare; clicca per una nota; trascina per rettangoli, ellissi e frecce. |
 | Firma | `F` | Clicca dove mettere la firma (o un'immagine). La prima volta disegnala o prendila da una foto. |
 | Oscura | `X` | Trascina sull'area da oscurare per sempre. |
-| Oggetti | `O` | Prendi e trascina testi, scritte, firme, immagini, note e forme; ridimensiona dall'angolo, `Canc` per eliminare; doppio clic su una nota per riscriverla. |
+| Oggetti | `O` | Prendi e trascina testi, scritte, tabelle, disegni, firme, immagini, campi, note e forme; ridimensiona dall'angolo, `Canc` per eliminare; doppio clic su una nota per riscriverla. |
 
 **Scrittura a mano:** premi **Leggi scrittura** (o *Analizza pagina* nel pannello *Scrittura*). Le righe scritte a mano vengono colorate (un colore per persona), quelle stampate in grigio, quelle dubbie in rosso con un `?`, l'inchiostro non letto in arancione. Cliccando una riga puoi correggerne la lettura, scegliere a quale *scrittura* appartiene, dire se quella scrittura è *A mano* o *Stampata* (vale per tutte le sue righe) e aprire **Segna lettere**: ogni riquadro è un carattere, clicca un riquadro e digita la lettera o il numero (passa da solo al successivo), trascina i bordi per spostarli, *Dividi*/*Unisci* per correggere la segmentazione. Nel pannello *Scritture di questa pagina* scegli una scrittura per vederne le lettere (clicca una lettera per vederne gli esempi ed eliminare quelli sbagliati), rinominarla, *ricordarla* con un nome o completarla con una calligrafia ricordata (solo per le lettere che le mancano). Con lo strumento *A mano* puoi anche cliccare una scritta esistente per riscriverla.
 
@@ -93,6 +93,7 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\pip install -r requirements.txt
 .\.venv\Scripts\python app\main.py            # avvia l'app
 .\.venv\Scripts\python tools\smoke_test.py    # test del motore
+.\.venv\Scripts\python tools\eval_handwriting.py pagina.png --truth testo.txt   # misura lettura e riscrittura
 .\build.ps1                                   # crea CalamoPDF.exe e l'installer (Inno Setup 6)
 ```
 

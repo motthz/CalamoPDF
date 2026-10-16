@@ -279,7 +279,14 @@ function speakNext() {
   u.rate = +$("#speakRate").value || 1;
   const gen = sp;
   u.onend = () => { if (S.speak === gen && !gen.paused) { gen.k++; speakNext(); } };
-  u.onerror = u.onend;
+  u.onerror = e => {
+    // the voice cannot speak at all (no sound output, a broken voice): say so instead of going silent
+    if (["synthesis-failed", "audio-hardware", "synthesis-unavailable", "voice-unavailable"].includes(e.error) && S.speak === gen) {
+      stopSpeak();
+      return toast("La voce scelta non riesce a parlare: controlla l'uscita audio o scegli un'altra voce.", "warn");
+    }
+    u.onend();
+  };
   sp.utter = u;
   highlightSpeak(sp.page, it.bbox);
   $("#speakInfo").textContent = `Pagina ${sp.page + 1} · ${sp.k + 1}/${sp.items.length}`;
@@ -492,6 +499,8 @@ function itemsOf(P) {
     ...(d.objects || []).map(o => ({ kind: "obj", id: o.id, src: o.src, rect: o.rect })),
     ...(d.blocks || []).map(b => ({ kind: "blk", id: b.id, rect: b.bbox })),
     ...(d.ink || []).filter(l => l.source !== "unread" || l.text).map(l => ({ kind: "ink", id: l.id, rect: l.bbox })),
+    ...(d.graphics || []).filter(g => !(S.tool === "select" && g.kind === "image"))
+      .map(g => ({ kind: "gfx", id: g.id, rect: g.bbox, gkind: g.kind, xref: g.xref })),
   ];
 }
 const sameItem = (a, b) => a.kind === b.kind && String(a.id) === String(b.id);
@@ -534,10 +543,10 @@ function clearGuides(P) { $$(".guide", P ? P.overlay : document).forEach(n => n.
 // Maiusc+clic: choose several elements of a page
 function multiSelectDown(P, e) {
   if (S.tool !== "select" || !e.shiftKey) return false;
-  const el = e.target.closest(".obj, .blk, .ink");
+  const el = e.target.closest(".obj, .blk, .ink, .gfx");
   if (!el) return false;
   e.preventDefault();
-  const kind = el.classList.contains("obj") ? "obj" : el.classList.contains("blk") ? "blk" : "ink";
+  const kind = el.classList.contains("obj") ? "obj" : el.classList.contains("blk") ? "blk" : el.classList.contains("gfx") ? "gfx" : "ink";
   const it = itemsOf(P).find(x => x.kind === kind && String(x.id) === String(el.dataset.id));
   if (!it) return true;
   if (S.multi.length && S.multi[0].page !== P.i) S.multi = [];
@@ -587,12 +596,13 @@ async function alignItems(how) {
   if (!sel.length) return toast("Scegli gli elementi: clic, poi Maiusc+clic sugli altri.", "warn");
   const P = S.pages[sel[0].page];
   // fresh positions
-  sel = sel.map(m => ({ ...m, rect: (itemsOf(P).find(x => sameItem(x, m)) || m).rect }));
+  sel = sel.map(m => ({ ...m, ...(itemsOf(P).find(x => sameItem(x, m)) || {}), page: m.page }));
   const one = sel.length === 1, M = 36;
   const L = one ? M : Math.min(...sel.map(m => m.rect[0])), R = one ? P.w - M : Math.max(...sel.map(m => m.rect[2]));
   const T = one ? M : Math.min(...sel.map(m => m.rect[1])), B = one ? P.h - M : Math.max(...sel.map(m => m.rect[3]));
   const moves = [];
-  const add = (m, dx, dy) => moves.push({ kind: m.kind, id: m.id, src: m.src, bbox: m.rect, rect: m.rect, dx, dy });
+  const add = (m, dx, dy) => moves.push({ kind: m.kind, id: m.id, src: m.src, bbox: m.rect, rect: m.rect, dx, dy,
+                                         gkind: m.gkind, xref: m.xref });
   if (how.startsWith("dist")) {
     const h = how === "dist-h", a = h ? 0 : 1, b = h ? 2 : 3;
     const s = sel.slice().sort((p, q) => p.rect[a] - q.rect[a]);
