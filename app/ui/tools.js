@@ -423,7 +423,7 @@ function renderSensitive() {
 }
 function renderCompare(r) {
   const what = { changed: "modificata", added: "solo nell'altra versione", removed: "non c'è nell'altra versione" };
-  $("#cmpList").innerHTML = `<p class="small">${r.changed ? `<b>${r.changed}</b> pagine su ${r.total} diverse da “${esc(r.other)}”.` : `Nessuna differenza con “${esc(r.other)}”.`}</p>`
+  $("#cmpList").innerHTML = `<p class="small">${r.changed ? `<b>${r.changed}</b> ${r.changed === 1 ? "pagina" : "pagine"} su ${r.total} ${r.changed === 1 ? "diversa" : "diverse"} da “${esc(r.other)}”.` : `Nessuna differenza con “${esc(r.other)}”.`}</p>`
     + S.diffs.map((p, k) => `<button class="cmp-item" data-k="${k}"><b>Pagina ${p.page + 1}</b> <small>${what[p.status] || ""}${p.pixels ? " (scansione)" : ""}</small>
       ${p.added.length ? `<span class="add">+ ${esc(p.added.join(" ").slice(0, 160))}</span>` : ""}
       ${p.removed.length ? `<span class="del">− ${esc(p.removed.join(" ").slice(0, 160))}</span>` : ""}</button>`).join("")

@@ -420,7 +420,9 @@ function setTool(t) {
   S.tool = t;
   $$("#tools button").forEach(b => b.classList.toggle("active", b.dataset.tool === t));
   const st = $("#stage");
-  st.className = "stage tool-" + t;
+  // only the tool class changes: the stage keeps its other states (tabs, grid)
+  [...st.classList].filter(c => c.startsWith("tool-")).forEach(c => st.classList.remove(c));
+  st.classList.add("tool-" + t);
   $("#stTool").textContent = TOOL_NAMES[t];
   showToolOpts(t);
   if (t === "hand" && !S.glyphCount)

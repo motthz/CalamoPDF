@@ -7,6 +7,12 @@
 - Titoli delle sezioni in caratteri normali invece che in maiuscolo spaziato, angoli meno arrotondati, ombre più leggere.
 - Schermata iniziale più essenziale, con le funzioni in un elenco invece che in schede.
 
+**Correzioni dopo un controllo completo dell'app, schermata per schermata.**
+- Con più documenti aperti in schede, la barra delle opzioni degli strumenti (Annota, Firma, Oggetti) e l'inizio della pagina finivano in parte sotto le schede: ora restano sempre visibili, su una sola riga.
+- Con la finestra stretta (fino a 1000 px) i pulsanti di chiusura, "Esporta" e il pannello di destra non vengono più tagliati: "Leggi scrittura" ed "Esporta" diventano icone.
+- Le schede del pannello di destra non si toccano più; corretto "1 pagine su 3 diverse" nel confronto; niente più bordo di selezione sui pulsanti dopo un clic.
+- **Scrivere a mano più pulito**: le lettere imparate non contengono più pezzi delle lettere vicine (scrittura inclinata), il piccolo stampato dei moduli o macchioline della scansione; le parole lette male non vengono più riusate tali e quali, e le sillabe si riusano solo dove il taglio tra le lettere è sicuro. Su moduli reali le frasi nuove escono molto più leggibili.
+
 ## Calamo PDF Studio 1.4.0
 
 **Tutti gli strumenti per lavorare sui PDF, oltre alla scrittura a mano.**

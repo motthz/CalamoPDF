@@ -992,7 +992,7 @@ def main():
         pass
     window = webview.create_window(
         "Calamo PDF Studio", ui, js_api=api, width=width, height=height, min_size=(1000, 640),
-        frameless=True, easy_drag=False, background_color="#0D0E12", text_select=True,
+        frameless=True, easy_drag=False, background_color="#111113", text_select=True,
     )
     if maximized:
         window.events.shown += lambda: api._win_maximize()
