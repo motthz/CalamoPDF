@@ -29,6 +29,7 @@ jobs:
       - name: Engine and updater tests
         env:
           CALAMO_MODEL_DIR: ${{ runner.temp }}/calamo-model
+          CALAMO_GITHUB_TOKEN: ${{ github.token }}
         run: python tools/test_windows.py
 
       - uses: actions/setup-node@v4
