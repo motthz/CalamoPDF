@@ -270,7 +270,7 @@ input[type=color]::-webkit-color-swatch { border: 0; border-radius: 4px; }
 /* ---------- Welcome ---------- */
 .welcome { position: absolute; inset: 0; display: grid; place-items: center; overflow: auto; background: var(--stage); z-index: 20; }
 .welcome-glow { display: none; }
-.welcome-inner { position: relative; width: 100%; max-width: 640px; padding: 40px; text-align: left; animation: fade .3s; }
+.welcome-inner { position: relative; width: 100%; max-width: 760px; padding: 40px; text-align: left; animation: fade .3s; }
 .welcome-logo { width: 28px; height: 28px; color: var(--text); }
 .welcome h1 { font: 600 30px/1.15 var(--font-display); letter-spacing: -.5px; margin: 18px 0 8px; }
 .welcome h1 em { font: italic 500 30px/1 var(--serif); color: var(--text-2); }
@@ -296,8 +296,8 @@ input[type=color]::-webkit-color-swatch { border: 0; border-radius: 4px; }
 .drag-over .welcome::after { content: ""; position: absolute; inset: 16px; border: 1.5px dashed var(--accent-line); border-radius: 12px; pointer-events: none; }
 
 /* ---------- Inspector ---------- */
-.tabs { display: flex; gap: 2px; padding: 10px 10px 0; border-bottom: 1px solid var(--line); }
-.tabs button { flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 9px 4px 11px; color: var(--text-3); font-weight: 500; font-size: 12.5px; position: relative; }
+.tabs { display: flex; gap: 4px; padding: 10px 8px 0; border-bottom: 1px solid var(--line); }
+.tabs button { flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 9px 4px 11px; color: var(--text-3); font-weight: 500; font-size: 12px; position: relative; }
 .tabs button svg { width: 15px; height: 15px; }
 .tabs button:hover { color: var(--text); }
 .tabs button.active { color: var(--text); }
