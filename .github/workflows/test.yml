@@ -42,6 +42,7 @@ jobs:
           npm install --no-save --prefix build/pw playwright@1.47.2
           node build/pw/node_modules/playwright/cli.js install chromium
           $env:PLAYWRIGHT = (Resolve-Path build/pw/node_modules/playwright).Path
+          if (-not (Get-CimInstance Win32_SoundDevice)) { $env:NO_AUDIO = "1"; "Nessuna scheda audio su questa macchina" }
           $srv = Start-Process python -ArgumentList "tools/ui_harness.py", "build/uitest" -PassThru -NoNewWindow
           try { node tools/ui_test.js build/uitest; if ($LASTEXITCODE -ne 0) { throw "interface test failed" } }
           finally { Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue }

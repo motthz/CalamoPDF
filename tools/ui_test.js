@@ -86,7 +86,7 @@ const ok = (name, cond, extra = "") => { console.log((cond ? "PASS " : "FAIL ") 
     const first = said[0] || {};
     console.log("   frase: " + JSON.stringify(first));
     ok("lettura ad alta voce: la frase va a una voce di sistema", (first.text || "").includes("Buongiorno") && voices.some(v => v.startsWith(first.voice)), first.voice);
-    if (first.end && first.end.startsWith("error:audio")) console.log("SKIP pronuncia: questa macchina non ha un'uscita audio (" + first.end + ")");
+    if (first.end && first.end.startsWith("error:") && process.env.NO_AUDIO) console.log("SKIP pronuncia: questa macchina non ha una scheda audio (" + first.end + ")");
     else ok("lettura ad alta voce: frase pronunciata fino alla fine", first.end === "end", first.end);
     await p.keyboard.press("Escape");
   }

@@ -279,7 +279,14 @@ function speakNext() {
   u.rate = +$("#speakRate").value || 1;
   const gen = sp;
   u.onend = () => { if (S.speak === gen && !gen.paused) { gen.k++; speakNext(); } };
-  u.onerror = u.onend;
+  u.onerror = e => {
+    // the voice cannot speak at all (no sound output, a broken voice): say so instead of going silent
+    if (["synthesis-failed", "audio-hardware", "synthesis-unavailable", "voice-unavailable"].includes(e.error) && S.speak === gen) {
+      stopSpeak();
+      return toast("La voce scelta non riesce a parlare: controlla l'uscita audio o scegli un'altra voce.", "warn");
+    }
+    u.onend();
+  };
   sp.utter = u;
   highlightSpeak(sp.page, it.bbox);
   $("#speakInfo").textContent = `Pagina ${sp.page + 1} · ${sp.k + 1}/${sp.items.length}`;
