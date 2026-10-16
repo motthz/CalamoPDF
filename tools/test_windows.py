@@ -480,6 +480,138 @@ def test_remove_and_mark():
           new[0]["text"] if new else "nessuna riga")
 
 
+def test_editing():
+    """1.4 editing tools on Windows paths: pages, marks, signature, redaction, stamps, protect."""
+    import io
+    import pymupdf as fitz
+    from PIL import Image, ImageDraw
+    from engine.document import Session
+    tmp = tempfile.mkdtemp(prefix="calamo-edit-")
+    src = os.path.join(tmp, "contratto.pdf")
+    doc = fitz.open()
+    for i in range(3):
+        p = doc.new_page()
+        p.insert_text((72, 90), f"Pagina {i + 1}: Mario Rossi RSSMRA80A01H501U mario.rossi@example.com", fontsize=11)
+    doc.save(src)
+    other = os.path.join(tmp, "allegato.pdf")
+    d2 = fitz.open()
+    d2.new_page().insert_text((72, 90), "Allegato A", fontsize=14)
+    d2.save(other)
+    s = Session()
+    s.open(src)
+    s.merge_pdf(other, after=0)
+    s.move_page(1, 3)
+    order = [s.doc[i].get_text()[:9] for i in range(4)]
+    check("edit: merge and reorder pages", order[3].startswith("Allegato") and len(s.doc) == 4, str(order))
+    r = s.mark_text(0, [60, 75, 400, 95], "highlight", "#ffd400")
+    check("edit: highlight on text", any(o["type"] == "Highlight" for o in r["objects"]))
+    s.add_note(0, 500, 60, "Controllare", "#ffd400")
+    check("edit: comments listed", len(s.comments()) == 2)
+    img = Image.new("RGB", (400, 160), (238, 235, 228))
+    ImageDraw.Draw(img).line([(30, 120), (120, 40), (220, 120), (360, 50)], fill=(20, 20, 90), width=6)
+    buf = io.BytesIO()
+    img.save(buf, "JPEG")
+    s.save_signature("Prova", buf.getvalue(), clean=True)
+    r = s.place_signature(0, "Prova", 300, 700)
+    check("edit: signature placed", any(o["type"] == "signature" for o in r["objects"]))
+    hits = s.find_sensitive(["cf", "email"], "")
+    s.redact([{"page": h["page"], "bbox": h["bbox"]} for h in hits], True)
+    left = "".join(s.doc[i].get_text() for i in range(len(s.doc)))
+    check("edit: sensitive data really removed", "RSSMRA" not in left and "example.com" not in left, f"{len(hits)} hits")
+    s.stamp_pages({"footer": "Pagina {n} di {N}", "watermark": "BOZZA"})
+    check("edit: page numbers", "Pagina 4 di 4" in s.doc[3].get_text())
+    out = os.path.join(tmp, "protetto.pdf")
+    s.save_protected(out, "segreta", "", True, False, False)
+    d = fitz.open(out)
+    check("edit: password protected copy", d.needs_pass and d.authenticate("segreta") > 0)
+    light = os.path.join(tmp, "leggero.pdf")
+    r = s.save_optimized(light, "media")
+    check("edit: lighter copy opens", len(fitz.open(light)) == 4, f"{r['before']} -> {r['after']} byte")
+    cmp = s.compare_with(src)
+    check("edit: compare finds changes", cmp["changed"] >= 1, f"{cmp['changed']} di {cmp['total']}")
+    # drag a block of text
+    b0 = next(b for b in s.blocks(0)["blocks"] if "Mario" in b["text"])
+    r = s.move_block(0, b0["bbox"], 30, 200)
+    b1 = next((b for b in r["blocks"] if "Mario" in b["text"] and abs(b["bbox"][0] - b0["bbox"][0] - 30) < 2 and b["bbox"][1] > b0["bbox"][1] + 150), None)
+    check("drag: text moved with its font", b1 is not None, b1 and str([round(v) for v in b1["bbox"]]))
+    # text written after a save stays readable (saving used to leave stale font references)
+    s.save(os.path.join(tmp, "salvato.pdf"))
+    s.add_text(0, 72, 400, "Scritto dopo il salvataggio", {"family": "Arial", "size": 12})
+    b2 = next((b for b in s.blocks(0)["blocks"] if b["bbox"][1] > 380 and b["bbox"][1] < 420), None)
+    check("save: text written afterwards is readable", b2 is not None and b2["text"] == "Scritto dopo il salvataggio",
+          b2 and b2["text"])
+    check("save: spaces are real spaces (copy and search)", bool(s.doc[0].search_for("dopo il salvataggio")))
+    # merge and split whole files
+    from engine import files as FILES
+    merged = os.path.join(tmp, "unito.pdf")
+    FILES.merge([{"src": src, "name": "contratto.pdf"}, {"src": other, "name": "allegato.pdf", "pages": "1"}], merged)
+    check("files: merged with one bookmark per file", len(fitz.open(merged)) == 4 and len(fitz.open(merged).get_toc()) == 2)
+    folder = os.path.join(tmp, "parti")
+    os.makedirs(folder)
+    r = FILES.split(merged, "unito", folder, "ranges", "1-2, 3-4")
+    check("files: split by ranges", [len(fitz.open(f)) for f in r["files"]] == [2, 2], str([os.path.basename(f) for f in r["files"]]))
+
+
+def test_more():
+    """1.4: OCR layer with the real Windows OCR, conversions without Office, tables and
+    translation with Windows fonts."""
+    import io
+    import pymupdf as fitz
+    from PIL import Image
+    from engine.document import Session
+    from engine import convert as C
+    tmp = tempfile.mkdtemp(prefix="calamo-more-")
+    # searchable: read the sample with Windows OCR, then the writing can be searched
+    s = Session()
+    s.open(os.path.join(ROOT, "samples", "esempio.pdf"))
+    res = s.analyze(0)
+    words = [l["text"].split()[0] for l in res["ink"] if l["kind"] == "hand" and l["text"].split()]
+    r = s.make_searchable(0)
+    hit = s.doc[0].search_for(words[0]) if words else []
+    check("ocr: handwriting searchable after OCR", r["written"] > 0 and bool(hit), f"{r['written']} parole, cerco {words[:1]}")
+    # conversions: images and Word without Office (built-in or LibreOffice)
+    img = os.path.join(tmp, "foto.jpg")
+    Image.new("RGB", (900, 600), (180, 40, 40)).save(img)
+    out = os.path.join(tmp, "foto.pdf")
+    C.files_to_pdf([img], out)
+    check("convert: image to PDF", len(fitz.open(out)) == 1)
+    import docx
+    d = docx.Document()
+    d.add_heading("Relazione dopo il collaudo", 1)
+    d.add_paragraph("Affitto e ufficio.")
+    dp = os.path.join(tmp, "rel.docx")
+    d.save(dp)
+    out = os.path.join(tmp, "rel.pdf")
+    how = C.to_pdf(dp, out)
+    page = fitz.open(out)[0]
+    check("convert: Word to PDF", bool(page.search_for("dopo il collaudo")) or "collaudo" in page.get_text(), how)
+    imgs = C.pdf_to_images(fitz.open(out), [0], tmp, "rel", "png", 72)
+    check("convert: PDF to images", os.path.exists(imgs["files"][0]))
+    # a table rewritten with the Windows fonts
+    doc = fitz.open()
+    p = doc.new_page()
+    X, Y = [72, 220, 360], [100, 125, 150, 175]
+    for x in X:
+        p.draw_line((x, Y[0]), (x, Y[-1]))
+    for y in Y:
+        p.draw_line((X[0], y), (X[-1], y))
+    for r_, row in enumerate([["Voce", "Importo"], ["Affitto", "1200"], ["Luce", "80"]]):
+        for c_, t in enumerate(row):
+            p.insert_text((X[c_] + 4, Y[r_] + 17), t, fontsize=10)
+    tp = os.path.join(tmp, "tab.pdf")
+    doc.save(tp)
+    s = Session()
+    s.open(tp)
+    s.edit_table(0, 0, [{"r": 1, "c": 0, "text": "Affitto ufficio"}])
+    s.table_row(0, 0, 2, "add")
+    cells = s.table_cells(0, 0)["cells"]
+    check("table: cell edited and row added", len(cells) == 4 and cells[1][0] == "Affitto ufficio", str(cells))
+    check("table: spaces real in the new text", bool(s.doc[0].search_for("Affitto ufficio")))
+    # translation keeps the layout (a fake translator: the service is online)
+    s.translate_into("en", lambda texts, tgt: [t.replace("Voce", "Item").replace("Luce", "Electricity") for t in texts])
+    check("translate: text rewritten in place", any("Electricity" in b["text"] for b in s.blocks(0)["blocks"]))
+
+
 def test_setup_script():
     import updater
     text = updater.build_script({"kind": "setup"}, r"C:\T\CalamoPDF-Setup.exe", True,
@@ -499,7 +631,7 @@ def test_release_check():
 
 if __name__ == "__main__":
     for t in (test_ocr, test_writings, test_skewed_scan, test_handreader, test_reader_in_analysis, test_table_form, test_rewrite_keeps_background, test_remove_and_mark,
-              test_rotated_page_edit, test_portable_swap, test_setup_script, test_release_check):
+              test_rotated_page_edit, test_editing, test_more, test_portable_swap, test_setup_script, test_release_check):
         try:
             t()
         except Exception as e:

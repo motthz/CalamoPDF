@@ -5,6 +5,7 @@ import copy
 import io
 import difflib
 import os
+import re
 import threading
 
 import pymupdf as fitz
@@ -15,8 +16,12 @@ from . import handwriting as HW
 from . import writers as WR
 from .handwriting import HandwritingLibrary, PageWritings
 from .lexicon import LEXICON, WORD_RE
+from .editing import EditingMixin
+from .extras import ExtrasMixin
 from .ocr import PRINT_BELOW, Learning, prepare_page, read_page, read_region
 
+# search expands typographic ligatures ("ﬃ" is found by "ffi")
+SEARCH_FLAGS = fitz.TEXT_DEHYPHENATE | fitz.TEXT_PRESERVE_WHITESPACE | fitz.TEXT_MEDIABOX_CLIP
 REDACT_KW = dict(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=fitz.PDF_REDACT_LINE_ART_NONE)
 try:
     REDACT_KW["text"] = fitz.PDF_REDACT_TEXT_REMOVE
@@ -67,7 +72,20 @@ def _to_text(page, rect):
     return fitz.Rect(rect) * page.derotation_matrix
 
 
-def _write_upright(page, tw):
+def _append_words(tw, pos, text, font, size):
+    """TextWriter.append without the space characters: each word is placed where it goes
+    and the gaps are left empty. Windows fonts draw the space and the no-break space with
+    the same glyph, and MuPDF records it as a no-break space: copied or searched, "dopo il"
+    would not be "dopo il". Readers put real spaces back from the gaps."""
+    x, y = pos
+    for part in re.split(r"( +)", text):
+        if part and not part.startswith(" "):
+            tw.append((x, y), part, font=font, fontsize=size)
+        x += font.text_length(part, fontsize=size)
+    return x
+
+
+def _write_upright(page, tw, opacity=-1, pre=None):
     """Write a TextWriter filled in displayed coordinates so the text lands exactly there,
     reading horizontally, whatever the page rotation and cropbox.
 
@@ -81,10 +99,12 @@ def _write_upright(page, tw):
             shift = fitz.Matrix(1, 0, 0, 1, cb.x, cb.y + mb.y0 - delta)
         m = ~tw.ctm * ~_mupdf_ctm(page) * ~shift
     except Exception:
-        return tw.write_text(page)
+        return tw.write_text(page, opacity=opacity)
+    if pre is not None:                       # e.g. a watermark turned around its centre
+        m = pre * m
     if abs(m.a - 1) + abs(m.b) + abs(m.c) + abs(m.d - 1) + abs(m.e) + abs(m.f) < 1e-6:
-        return tw.write_text(page)
-    tw.write_text(page, matrix=m)
+        return tw.write_text(page, opacity=opacity)
+    tw.write_text(page, matrix=m, opacity=opacity)
 
 
 def _write_hidden(page, tw):
@@ -168,7 +188,7 @@ def _find_in_line(line, term):
     return out
 
 
-class Session:
+class Session(EditingMixin, ExtrasMixin):
     MAX_UNDO = 40
 
     def __init__(self):
@@ -182,19 +202,37 @@ class Session:
         self.ignored = {}        # page index -> [rect]: "this is not writing", said by the user
         self.learning = Learning()
         self.resolver = None
+        self.title = None        # name of a document not saved yet (converted, translated...)
         self.version = 0         # bumps on every change, per page versions below
         self.page_versions = {}
 
     # ------------------------------------------------------------------ lifecycle
-    def open(self, path):
+    def open(self, path, password=None):
         with self.lock:
             with open(path, "rb") as f:
                 data = f.read()
             doc = fitz.open(stream=data, filetype="pdf")
             if doc.needs_pass:
-                raise RuntimeError("Il PDF è protetto da password.")
+                if not password:
+                    raise RuntimeError("PASSWORD_REQUIRED")
+                if not doc.authenticate(password):
+                    raise RuntimeError("PASSWORD_WRONG")
             self.doc, self.path = doc, path
+            self._password = password
             self.dirty = False
+            self.undo_stack, self.redo_stack = [], []
+            self.ink, self.page_versions, self.hands = {}, {}, {}
+            self.ignored = {}
+            self.resolver = F.FontResolver(doc)
+            self.version += 1
+            return self.info()
+
+    def open_bytes(self, data, title):
+        """A document made in Calamo (converted, merged, translated): not on disk yet."""
+        with self.lock:
+            doc = fitz.open(stream=data, filetype="pdf")
+            self.doc, self.path, self.title, self._password = doc, None, title, None
+            self.dirty = True
             self.undo_stack, self.redo_stack = [], []
             self.ink, self.page_versions, self.hands = {}, {}, {}
             self.ignored = {}
@@ -218,7 +256,7 @@ class Session:
     def info(self):
         pages = [{"w": p.rect.width, "h": p.rect.height, "v": self.page_versions.get(i, 0)}
                  for i, p in enumerate(self.doc)]
-        return {"path": self.path, "name": os.path.basename(self.path) if self.path else "Senza titolo.pdf",
+        return {"path": self.path, "name": os.path.basename(self.path) if self.path else (self.title or "Senza titolo.pdf"),
                 "pages": pages, "dirty": self.dirty, "canUndo": bool(self.undo_stack),
                 "canRedo": bool(self.redo_stack), "analyzed": sorted(self.ink.keys())}
 
@@ -230,9 +268,22 @@ class Session:
             tmp = target + ".calamo-tmp"
             self.doc.save(tmp, garbage=3, deflate=True, clean=False)
             os.replace(tmp, target)
+            # saving compacts the document in memory and renumbers its objects; PyMuPDF's
+            # record of the fonts already written then points at the wrong objects, and text
+            # written after the save would be unreadable when copied or searched. Go on from
+            # the saved file instead.
+            self._reload(target)
             self.path = target
             self.dirty = False
             return self.info()
+
+    def _reload(self, path):
+        with open(path, "rb") as f:
+            doc = fitz.open(stream=f.read(), filetype="pdf")
+        if doc.needs_pass and not doc.authenticate(getattr(self, "_password", None) or ""):
+            return                                  # keep working on the document in memory
+        self.doc = doc
+        self.resolver = F.FontResolver(doc)
 
     # ------------------------------------------------------------------ undo
     def _snapshot(self, page=None):
@@ -517,7 +568,7 @@ class Session:
                 })
             styles = self.hands[index].listing(self.ink.get(index, [])) if index in self.hands else []
             return {"blocks": out, "ink": self._ink_public(index), "styles": styles,
-                    "version": self.page_versions.get(index, 0)}
+                    "objects": self.objects(index), "version": self.page_versions.get(index, 0)}
 
     def _raw_block(self, page, ref):
         """ref: block bbox (preferred - indices shift after edits) or index."""
@@ -572,7 +623,7 @@ class Session:
             color = _rgb(override["color"]) if override.get("color") else \
                 tuple(((s["color"] >> k) & 255) / 255 for k in (16, 8, 0))
             tw = fitz.TextWriter(page.rect, color=color)
-            tw.append((x, y), text, font=font, fontsize=size)
+            _append_words(tw, (x, y), text, font, size)
             writers.append(tw)
             x += font.text_length(text, fontsize=size)
         return x
@@ -740,7 +791,7 @@ class Session:
             size = float(style.get("size") or 12)
             tw = fitz.TextWriter(page.rect, color=_rgb(style.get("color") or "#111111"))
             for k, line in enumerate(text.replace("\r", "").split("\n")):
-                tw.append((x, y + size * 0.8 + size * 1.25 * k), line, font=font, fontsize=size)
+                _append_words(tw, (x, y + size * 0.8 + size * 1.25 * k), line, font, size)
             _write_upright(page, tw)
             self._touch(index)
             return self.blocks(index)
@@ -764,7 +815,7 @@ class Session:
             if not term:
                 return hits
             for i, page in enumerate(self.doc):
-                for r in page.search_for(term):
+                for r in page.search_for(term, flags=SEARCH_FLAGS):
                     r = _shown(page, r)
                     hits.append({"page": i, "bbox": [r.x0, r.y0, r.x1, r.y1], "kind": "text"})
                 for j, l in enumerate(self.ink.get(i, [])):
@@ -1295,7 +1346,7 @@ class Session:
                 # as wide as the picture of the text, so a search highlights the right words
                 size *= min(max(res["width_pt"] / max(font.text_length(text, fontsize=size), 1), 0.3), 3)
                 tw = fitz.TextWriter(page.rect)
-                tw.append((x, baseline), text, font=font, fontsize=size)
+                _append_words(tw, (x, baseline), text, font, size)
                 _write_hidden(page, tw)
             except Exception:
                 pass
