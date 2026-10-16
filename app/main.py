@@ -29,7 +29,7 @@ from engine.ocr import available_languages  # noqa: E402
 from engine.storage import load_json, save_json  # noqa: E402
 import updater  # noqa: E402
 
-VERSION = "1.4.1"
+VERSION = "1.4.2"
 
 _user32 = ctypes.windll.user32
 _user32.FindWindowW.restype = wintypes.HWND
@@ -78,6 +78,8 @@ class Api:
                 self._settings.pop(k, None)
             save_json("settings.json", self._settings)
         self._update = None              # newer release found on GitHub
+        import engine.handwriting as HWmod
+        HWmod.REWRITE_READER = self._reader      # rewritten lines: the most legible composition
         self._update_file = None         # downloaded and ready to install
         self._update_relaunch = False
         self._downloading = False
@@ -576,6 +578,14 @@ class Api:
         return self._s.move_ink(index, line_id, dx, dy)
 
     @safe
+    def graphics(self, index):
+        return self._s.graphics(index)
+
+    @safe
+    def move_graphic(self, index, item, dx, dy):
+        return self._s.move_graphic(index, item, dx, dy)
+
+    @safe
     def delete_pages(self, spec):
         return self._s.delete_pages(spec)
 
@@ -781,6 +791,8 @@ class Api:
 
     # ---------------------------------------------------------------- handwriting
     def _reader(self):
+        """The handwriting reader, if installed and switched on (also used to choose the
+        most legible way of rewriting a line)."""
         if not self._settings.get("handModel", True) or not READER.installed() or not READER.runtime_ok():
             return None
         return READER
@@ -830,6 +842,14 @@ class Api:
                 self._model["downloading"] = False
         threading.Thread(target=run, daemon=True).start()
         return True
+
+    @safe
+    def separate_lines(self, index, ids, kind):
+        return self._s.separate_lines(index, ids, kind)
+
+    @safe
+    def keep_lines(self, index, ids):
+        return self._s.keep_lines(index, ids)
 
     @safe
     def set_ink_kind(self, index, line_id, kind):

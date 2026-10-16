@@ -48,6 +48,18 @@ drawSwatches();
 
 // ---------------------------------------------------------------- overlay: objects, sensitive data, differences
 function drawExtras(P, frag, s) {
+  drawGraphics(P, frag, s, true);
+  if (S.tool === "edit") {
+    // notes, shapes, signatures and stamps can be dragged while editing too
+    (P.data.objects || []).filter(o => o.src === "annot").forEach(o => {
+      const d = document.createElement("div");
+      d.className = "obj soft";
+      d.dataset.id = o.id; d.dataset.src = o.src;
+      d.title = `${o.label}: trascina per spostare`;
+      Object.assign(d.style, box(o.rect, s, 2));
+      frag.appendChild(d);
+    });
+  }
   if (S.tool === "select") {
     (P.data.objects || []).forEach(o => {
       const d = document.createElement("div");
@@ -564,23 +576,71 @@ $("#splitGo").onclick = () => guarded(async () => {
   toast(`Creati ${plural(r.files.length, "file", "file")} da ${plural(r.pages, "pagina", "pagine")}`, "ok", { label: "Apri cartella", run: () => call("reveal", r.folder) });
 }, "Divisione del PDF…");
 
+// ---------------------------------------------------------------- the other elements of a page
+// Drawings, tables, pictures, form fields and the graphics of a scan: found once per page
+// version (on a scan it takes a moment), drawn under the text so a click on text edits it.
+function drawGraphics(P, frag, s, framed = false) {
+  if (S.tool !== "edit" && S.tool !== "select") return;
+  const g = P.data.graphics;
+  if (!framed && (!g || P.gfxV !== P.v)) loadGraphics(P);
+  if (!g) return;
+  // an element with text on it (a table, a box with its label) is taken by its edges, over
+  // the text; the text inside stays to be clicked and edited
+  const texts = [...P.data.blocks.map(b => b.bbox), ...(P.data.ink || []).map(l => l.bbox)];
+  g.forEach(e => {
+    if (S.tool === "select" && e.kind === "image") return;     // already an object there
+    const b = e.bbox, holds = texts.some(t => { const cx = (t[0] + t[2]) / 2, cy = (t[1] + t[3]) / 2;
+      return cx > b[0] && cx < b[2] && cy > b[1] && cy < b[3]; });
+    if (holds !== framed) return;
+    const d = document.createElement("div");
+    d.className = "gfx" + (e.kind === "scan" ? " scan" : "") + (holds ? " framed" : "");
+    d.dataset.id = e.id;
+    d.title = `${e.label}: trascina per spostare`;
+    if (holds) d.innerHTML = '<i class="e t"></i><i class="e r"></i><i class="e b"></i><i class="e l"></i>';
+    Object.assign(d.style, box(e.bbox, s, 2));
+    frag.appendChild(d);
+  });
+}
+async function loadGraphics(P) {
+  if (P.gfxLoading === P.v) return;
+  const v = P.gfxLoading = P.v;
+  try {
+    const g = await call("graphics", P.i);
+    if (P.v !== v || !P.data) return;
+    P.data.graphics = g;
+    P.gfxV = v;
+    drawOverlay(P);
+  } catch (e) { /* the page can still be edited without them */ }
+  finally { if (P.gfxLoading === v) P.gfxLoading = null; }
+}
+
 // ---------------------------------------------------------------- drag the text and the writing of a page
 // Press on a block of text or a line of a scan and drag it: on release it is moved there.
 // A click without moving keeps doing what the tool does (edit the text, open the line).
 function startElementDrag(P, e) {
   if (S.tool !== "edit" && S.tool !== "select") return false;
-  if (e.target.closest(".obj, .editor")) return false;
-  const el = e.target.closest(".blk, .ink");
+  if (e.target.closest(".editor")) return false;
+  const soft = e.target.closest(".obj.soft");
+  if (soft) {                       // a note, a shape, a signature while editing
+    const o = objOf(P, soft.dataset.id);
+    if (!o) return false;
+    e.preventDefault();
+    dragObject(P, o, e, false);
+    return true;
+  }
+  if (e.target.closest(".obj")) return false;
+  const el = e.target.closest(".blk, .ink, .gfx");
   if (!el) return false;
-  const isInk = el.classList.contains("ink");
-  const item = isInk ? (P.data.ink || []).find(l => l.id === +el.dataset.id) : P.data.blocks.find(b => b.id === +el.dataset.id);
+  const isInk = el.classList.contains("ink"), isGfx = el.classList.contains("gfx");
+  const item = isGfx ? (P.data.graphics || []).find(g => g.id === +el.dataset.id)
+    : isInk ? (P.data.ink || []).find(l => l.id === +el.dataset.id) : P.data.blocks.find(b => b.id === +el.dataset.id);
   if (!item || (isInk && item.source === "unread" && !item.text && S.tool === "edit")) return false;
   const s = scale(), a = pagePoint(P, e), bb = item.bbox;
   let ghost = null, d = { x: 0, y: 0 };
   const move = ev => {
     const b = pagePoint(P, ev);
     d = { x: b.x - a.x, y: b.y - a.y };
-    if (ghost) d = snapDrag(P, bb, d, { kind: isInk ? "ink" : "blk", id: item.id });
+    if (ghost) d = snapDrag(P, bb, d, { kind: isGfx ? "gfx" : isInk ? "ink" : "blk", id: item.id });
     if (!ghost) {
       if (Math.abs(d.x) + Math.abs(d.y) < 5) return;
       ghost = document.createElement("div");
@@ -601,14 +661,19 @@ function startElementDrag(P, e) {
     window.removeEventListener("mouseup", up);
     document.body.classList.remove("dragging-el");
     clearGuides(P);
-    if (!ghost) return;
+    if (!ghost) {
+      if (isGfx && S.tool === "select") selectObj(null);     // a click on a drawing: nothing chosen
+      return;
+    }
     S.suppressClick = Date.now();
     await guarded(async () => {
-      const r = isInk ? await call("move_ink", P.i, item.id, d.x, d.y) : await call("move_block", P.i, item.bbox, d.x, d.y);
+      const r = isGfx ? await call("move_graphic", P.i, item, d.x, d.y)
+        : isInk ? await call("move_ink", P.i, item.id, d.x, d.y) : await call("move_block", P.i, item.bbox, d.x, d.y);
       await afterChange();
-      toast(isInk ? "Scritta spostata (Ctrl+Z per annullare)" : "Testo spostato (Ctrl+Z per annullare)", "ok");
+      toast(isGfx ? `${item.label} spostat${["Grafica", "Tabella", "Immagine"].includes(item.label) ? "a" : "o"} (Ctrl+Z per annullare)`
+        : isInk ? "Scritta spostata (Ctrl+Z per annullare)" : "Testo spostato (Ctrl+Z per annullare)", "ok");
       return r;
-    }, isInk ? "Spostamento della scritta…" : null);
+    }, isInk || item.kind === "scan" ? "Spostamento…" : null);
     ghost.remove();
     el.classList.remove("drag-src");
   };

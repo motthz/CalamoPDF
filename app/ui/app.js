@@ -314,8 +314,9 @@ async function loadThumb(P) {
 function drawOverlay(P) {
   if (!P.data) return;
   const s = scale(), ov = P.overlay;
-  $$(".blk, .ink, .hit, .obj, .diff, .multi-box, .ruler, .guide", ov).forEach(n => n.remove());
+  $$(".gfx, .blk, .ink, .hit, .obj, .diff, .multi-box, .ruler, .guide", ov).forEach(n => n.remove());
   const frag = document.createDocumentFragment();
+  drawGraphics(P, frag, s);
   P.data.blocks.forEach(b => {
     const d = document.createElement("div");
     d.className = "blk";
@@ -1018,6 +1019,7 @@ function applyHand(info, page) {
   if (info.styles) {
     setStyles(S.current, info.styles);
     renderWritings(info.styles, info.selected);
+    renderSuspects(info.suspects);
   }
   if (info.height) S.handHeight = info.height;
   const h = info.hand || info;
@@ -1050,6 +1052,21 @@ async function refreshHand(sid) {
     updateLearning(r.learning);
     if (S.pages[page]) drawOverlay(S.pages[page]);
   } catch (e) { /* no document yet */ }
+}
+// lines that look of the other kind (print in a handwriting, or the opposite): the user decides
+function renderSuspects(sus) {
+  const box = $("#kindHint");
+  const pr = (sus && sus.print) || [], hd = (sus && sus.hand) || [];
+  const ids = pr.length ? pr : hd, kind = pr.length ? "print" : "hand";
+  if (!S.doc || !ids.length) { box.hidden = true; return; }
+  const n = ids.length === 1 ? "1 riga sembra" : `${ids.length} righe sembrano`;
+  box.innerHTML = `<p>${n} ${kind === "print" ? "stampat" : "scritt"}${ids.length === 1 ? "a" : "e"}${kind === "print" ? "" : " a mano"}, ma ${ids.length === 1 ? "è" : "sono"} in una scrittura ${kind === "print" ? "a mano" : "stampata"}.</p>
+    <div class="kind-hint-actions"><button class="btn sm" data-a="show">Mostra</button><button class="btn sm primary" data-a="sep">Separa</button><button class="btn sm ghost" data-a="keep">Vanno bene così</button></div>`;
+  box.hidden = false;
+  const page = S.current;
+  $('[data-a="show"]', box).onclick = () => { const P = S.pages[page]; ids.forEach(id => { const el = $(`.ink[data-id="${id}"]`, P.overlay); if (el) { el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash"); } }); const l = (P.data.ink || []).find(x => x.id === ids[0]); if (l) goToPage(page, l.bbox[1]); };
+  $('[data-a="sep"]', box).onclick = () => guarded(async () => { const r = await call("separate_lines", page, ids, kind); applyInkResult(page, r); toast(kind === "print" ? "Righe spostate nello stampato: non insegnano più lettere alla scrittura a mano" : "Righe spostate in una scrittura a mano", "ok"); });
+  $('[data-a="keep"]', box).onclick = () => guarded(async () => { const r = await call("keep_lines", page, ids); applyHand(r, page); });
 }
 function renderWritings(styles, selected) {
   const box = $("#writingList");

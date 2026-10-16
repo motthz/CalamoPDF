@@ -608,7 +608,17 @@ kbd { font: 600 10px/1 var(--font); padding: 3px 5px; border-radius: 4px; backgr
 .tool-select .blk:hover { background: rgba(122, 167, 255, .08); box-shadow: 0 0 0 1.5px rgba(122, 167, 255, .7); }
 .drag-ghost { position: absolute; z-index: 6; pointer-events: none; background-repeat: no-repeat; border-radius: 3px;
   outline: 1.5px dashed #2F4C95; box-shadow: 0 10px 28px rgba(0,0,0,.28); opacity: .92; }
-.blk.drag-src, .ink.drag-src { background: rgba(150, 150, 160, .25) !important; }
+.gfx { position: absolute; border-radius: 3px; cursor: move; }
+.tool-edit .gfx:hover, .tool-select .gfx:hover { box-shadow: 0 0 0 1px rgba(122, 167, 255, .7); background: rgba(122, 167, 255, .06); }
+.gfx.framed { pointer-events: none; }
+.gfx.framed .e { position: absolute; pointer-events: auto; cursor: move; }
+.gfx.framed .e.t { left: -4px; right: -4px; top: -4px; height: 8px; }
+.gfx.framed .e.b { left: -4px; right: -4px; bottom: -4px; height: 8px; }
+.gfx.framed .e.l { top: -4px; bottom: -4px; left: -4px; width: 8px; }
+.gfx.framed .e.r { top: -4px; bottom: -4px; right: -4px; width: 8px; }
+.obj.soft { box-shadow: none; background: transparent; }
+.obj.soft:hover { box-shadow: 0 0 0 1px rgba(122, 167, 255, .7); background: rgba(122, 167, 255, .06); }
+.gfx.drag-src, .blk.drag-src, .ink.drag-src { background: rgba(150, 150, 160, .25) !important; }
 body.dragging-el, body.dragging-el * { cursor: grabbing !important; }
 .modal.files-modal { width: min(640px, 94vw); display: flex; flex-direction: column; gap: 12px; }
 .files-modal h3 { margin: 0; }
@@ -739,3 +749,8 @@ button:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 1p
 .tabs button { padding-left: 4px; padding-right: 4px; font-size: 11.5px; }
 .tabs button:not(.tab-icon) { flex: 1 1 auto; }
 .hero-card .row > .btn { min-width: 0; flex: 1 1 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* lines that look of the other kind: asked, not decided silently */
+.kind-hint { margin: 0 0 10px; padding: 10px 12px; border-radius: 10px; background: rgba(214, 160, 40, .1); border: 1px solid rgba(214, 160, 40, .35); }
+.kind-hint p { margin: 0 0 8px; font-size: 12.5px; line-height: 1.45; }
+.kind-hint-actions { display: flex; gap: 6px; flex-wrap: wrap; }

@@ -612,6 +612,122 @@ def test_more():
     check("translate: text rewritten in place", any("Electricity" in b["text"] for b in s.blocks(0)["blocks"]))
 
 
+def test_graphics():
+    """1.4.2: every element of a page can be dragged: a table with its text, a drawing, a
+    picture, a form field, and on a scan a graphic of the image (here a stamp)."""
+    import io
+    import pymupdf as fitz
+    from PIL import Image, ImageDraw
+    from engine.document import Session
+    tmp = tempfile.mkdtemp(prefix="calamo-gfx-")
+    d = fitz.open()
+    p = d.new_page(width=595, height=842)
+    for i in range(4):
+        p.draw_line((60, 100 + i * 20), (300, 100 + i * 20), width=1)
+    for x in (60, 180, 300):
+        p.draw_line((x, 100), (x, 160), width=1)
+    for i in range(3):
+        p.insert_text((65, 115 + i * 20), f"Voce {i + 1}", fontsize=10)
+    p.draw_circle((450, 120), 25, color=(0.8, 0, 0), fill=(1, 0.8, 0))
+    buf = io.BytesIO()
+    Image.new("RGB", (80, 50), (30, 120, 200)).save(buf, "PNG")
+    p.insert_image(fitz.Rect(60, 300, 140, 350), stream=buf.getvalue())
+    w = fitz.Widget()
+    w.field_type, w.field_name, w.rect, w.field_value = fitz.PDF_WIDGET_TYPE_TEXT, "nome", fitz.Rect(300, 300, 450, 320), "Mario"
+    p.add_widget(w)
+    path = os.path.join(tmp, "g.pdf")
+    d.save(path)
+    for rot in (0, 90):
+        s = Session()
+        s.open(path)
+        if rot:
+            s.rotate_page(0, rot)
+        g = s.graphics(0)
+        kinds = sorted(e["kind"] for e in g)
+        check(f"graphics {rot}: drawings, picture and field found", kinds == ["field", "image", "vector", "vector"], kinds)
+        for e in g:
+            s.move_graphic(0, e, 20, 150)
+        after = s.graphics(0)
+        moved = all(any(a["kind"] == e["kind"] and abs(a["bbox"][1] - min(e["bbox"][1] + 150, s.doc[0].rect.height - (e["bbox"][3] - e["bbox"][1]))) < 2
+                        for a in after) for e in g)
+        check(f"graphics {rot}: every element moved", moved, [(e["kind"], [round(v) for v in e["bbox"]]) for e in after])
+        words = [w_[4] for w_ in s.doc[0].get_text("words")]
+        check(f"graphics {rot}: the table took its text along", words.count("Voce") == 3, words)
+        check(f"graphics {rot}: nothing left behind", len(s.doc[0].get_drawings()) == len(fitz.open(path)[0].get_drawings()))
+    # a scan with a stamp
+    img = Image.new("RGB", (1240, 1754), (238, 234, 225))
+    dr = ImageDraw.Draw(img)
+    dr.ellipse((850, 1350, 1100, 1600), outline=(190, 30, 40), width=8)
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=90)
+    d = fitz.open()
+    d.new_page(width=595, height=842).insert_image(fitz.Rect(0, 0, 595, 842), stream=buf.getvalue())
+    path = os.path.join(tmp, "scan.pdf")
+    d.save(path)
+    s = Session()
+    s.open(path)
+    g = [e for e in s.graphics(0) if e["kind"] == "scan"]
+    check("scan graphic found", len(g) == 1, g)
+    if g:
+        s.move_graphic(0, g[0], -250, -400)
+        pix = s.doc[0].get_pixmap(dpi=72)
+        a = pix.samples
+        def red(x, y):
+            o = (y * pix.width + x) * pix.n
+            return a[o] > 150 and a[o + 1] < 110
+        old = sum(red(x, y) for x in range(400, 535) for y in range(640, 775))
+        new = sum(red(x, y) for x in range(150, 285) for y in range(240, 375))
+        check("scan graphic lifted and laid down elsewhere", old < 5 and new > 50, f"prima {old}, dopo {new}")
+
+
+def test_real_services():
+    """What only a real Windows (and the internet) has: online translation, Office
+    printing to PDF, the voices for reading aloud. Skipped, not failed, where missing."""
+    from engine import extras as EX
+    try:
+        out = EX.translate_texts(["Buongiorno a tutti", "Il contratto è firmato."], "en")
+        check("translate (online): Italian to English", "morning" in out[0].lower() and "contract" in out[1].lower(), out)
+    except RuntimeError as e:
+        print("SKIP translate (online):", e)
+    if sys.platform != "win32":
+        return
+    import winreg
+    try:
+        winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, "Word.Application").Close()
+        word = True
+    except OSError:
+        word = False
+    if word:
+        import docx
+        import pymupdf as fitz
+        from engine import convert as C
+        tmp = tempfile.mkdtemp(prefix="calamo-office-")
+        d = docx.Document()
+        d.add_paragraph("Stampato da Microsoft Word")
+        dp = os.path.join(tmp, "w.docx")
+        d.save(dp)
+        out = os.path.join(tmp, "w.pdf")
+        check("Office: Word prints to PDF", C._office_com(dp, out) and "Microsoft Word" in fitz.open(out)[0].get_text())
+    else:
+        print("SKIP Office: Microsoft Word is not installed here")
+    r = subprocess.run(["powershell", "-NoProfile", "-Command",
+                        "Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer)"
+                        ".GetInstalledVoices() | ForEach-Object { $_.VoiceInfo.Name + ' ' + $_.VoiceInfo.Culture }"],
+                       capture_output=True, text=True, timeout=60)
+    voices = [v for v in r.stdout.splitlines() if v.strip()]
+    print("   voices:", voices)
+    if voices:
+        r = subprocess.run(["powershell", "-NoProfile", "-Command",
+                            "Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+                            "$f = Join-Path $env:TEMP 'calamo-voce.wav'; $s.SetOutputToWaveFile($f); "
+                            "$s.Speak('Buongiorno, questa è una prova'); $s.Dispose(); (Get-Item $f).Length"],
+                           capture_output=True, text=True, timeout=60)
+        size = int((r.stdout.strip().splitlines() or ["0"])[-1] or 0)
+        check("voices: a system voice speaks", size > 10000, f"{size} byte")
+    else:
+        print("SKIP voices: no voice installed on this machine")
+
+
 def test_setup_script():
     import updater
     text = updater.build_script({"kind": "setup"}, r"C:\T\CalamoPDF-Setup.exe", True,
@@ -631,7 +747,8 @@ def test_release_check():
 
 if __name__ == "__main__":
     for t in (test_ocr, test_writings, test_skewed_scan, test_handreader, test_reader_in_analysis, test_table_form, test_rewrite_keeps_background, test_remove_and_mark,
-              test_rotated_page_edit, test_editing, test_more, test_portable_swap, test_setup_script, test_release_check):
+              test_rotated_page_edit, test_editing, test_more, test_graphics, test_real_services, test_portable_swap,
+              test_setup_script, test_release_check):
         try:
             t()
         except Exception as e:

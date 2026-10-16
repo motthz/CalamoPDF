@@ -18,6 +18,7 @@ from .handwriting import HandwritingLibrary, PageWritings
 from .lexicon import LEXICON, WORD_RE
 from .editing import EditingMixin
 from .extras import ExtrasMixin
+from .graphics import GraphicsMixin, tag_image
 from .ocr import PRINT_BELOW, Learning, prepare_page, read_page, read_region
 
 # search expands typographic ligatures ("ﬃ" is found by "ffi")
@@ -122,8 +123,10 @@ def _write_hidden(page, tw):
         pass
 
 
-def _image_upright(page, rect, png):
-    page.insert_image(_unrot(page, rect), stream=png, overlay=True, rotate=page.rotation)
+def _image_upright(page, rect, png, role="Ink"):
+    xref = page.insert_image(_unrot(page, rect), stream=png, overlay=True, rotate=page.rotation)
+    tag_image(page.parent, xref, role)
+    return xref
 
 
 def _stack(pngs):
@@ -188,7 +191,7 @@ def _find_in_line(line, term):
     return out
 
 
-class Session(EditingMixin, ExtrasMixin):
+class Session(EditingMixin, ExtrasMixin, GraphicsMixin):
     MAX_UNDO = 40
 
     def __init__(self):
@@ -410,7 +413,8 @@ class Session(EditingMixin, ExtrasMixin):
         # twice the pixels: drawing it back on the page then hardly softens anything
         img.resize((img.width * 2, img.height * 2), Image.BICUBIC).save(buf, "PNG")
         target = fitz.Rect(ox + x0 / zoom, oy + y0 / zoom, ox + x1 / zoom, oy + y1 / zoom)
-        page.insert_image(_unrot(page, target), stream=buf.getvalue(), rotate=page.rotation, overlay=True)
+        xref = page.insert_image(_unrot(page, target), stream=buf.getvalue(), rotate=page.rotation, overlay=True)
+        tag_image(self.doc, xref, "Cover")
         return True
 
     def _cell_right(self, page, r, zoom=2.0):
@@ -486,7 +490,8 @@ class Session(EditingMixin, ExtrasMixin):
         buf = io.BytesIO()
         Image.fromarray(patch).save(buf, "JPEG", quality=92)
         target = fitz.Rect(ring.x0 + lx / zoom, ring.y0, ring.x0 + rx / zoom, ring.y1)
-        page.insert_image(_unrot(page, target), stream=buf.getvalue(), rotate=page.rotation, overlay=True)
+        xref = page.insert_image(_unrot(page, target), stream=buf.getvalue(), rotate=page.rotation, overlay=True)
+        tag_image(self.doc, xref, "Cover")
 
     # ------------------------------------------------------------------ text model
     TEXT_FLAGS = fitz.TEXT_PRESERVE_WHITESPACE | fitz.TEXT_PRESERVE_LIGATURES | fitz.TEXT_MEDIABOX_CLIP
@@ -1022,10 +1027,7 @@ class Session(EditingMixin, ExtrasMixin):
         for sid, lib in pw.libs.items():
             if sids is not None and sid not in sids:
                 continue
-            lib.clear()
-            for j, l in enumerate(self.ink.get(index, [])):
-                if l.get("style") == sid:
-                    lib.learn_line(page, l, j)
+            lib.learn_lines(page, [(l, j) for j, l in enumerate(self.ink.get(index, [])) if l.get("style") == sid])
 
     # ------------------------------------------------------------------ writings of a page
     def writings(self, index):
@@ -1057,8 +1059,61 @@ class Session(EditingMixin, ExtrasMixin):
         lines = self.ink.get(index, [])
         lib = pw.get(sid) if sid is not None else (pw.default("hand") or pw.default("print"))
         return {"styles": pw.listing(lines), "selected": lib.sid if lib else None,
+                "suspects": self._kind_suspects(index),
                 "hand": lib.summary() if lib else HandwritingLibrary().summary(),
                 "height": lib.typical_height() if lib else 14.0, "learning": self.learning.stats()}
+
+    def _kind_suspects(self, index):
+        """Lines that look printed inside a handwritten writing, or handwritten inside a
+        printed one: printed or handwritten is decided for a whole writing, and a line
+        clearly of the other kind is asked about instead of being decided silently."""
+        out = {"print": [], "hand": []}
+        for j, l in enumerate(self.ink.get(index, [])):
+            if l.get("synthetic") or l.get("kindOk") or l.get("source") in ("user", "unread"):
+                continue
+            h = l.get("handScore")
+            if h is None or len((l.get("text") or "").strip()) < 5:
+                continue
+            if l.get("kind") == "hand" and h < PRINT_BELOW - 0.2:
+                out["print"].append(j)
+            elif l.get("kind") == "print" and h > PRINT_BELOW + 0.34:
+                out["hand"].append(j)
+        return out
+
+    def separate_lines(self, index, ids, kind):
+        """The lines asked about are of the other kind: they go to a writing of that kind
+        (the closest one of the page, else a new one), and no longer teach their old one."""
+        with self.lock:
+            kind = "print" if kind == "print" else "hand"
+            lines = self.ink.get(index, [])
+            pw = self.writings(index)
+            self._checkpoint(index)
+            touched = set()
+            target = None
+            for j in ids:
+                if not (0 <= j < len(lines)):
+                    continue
+                l = lines[j]
+                touched.add(l.get("style"))
+                if target is None:
+                    cents = [(lib.feat, lib.kind) for lib in pw.libs.values() if lib.feat is not None]
+                    sids = [sid for sid, lib in pw.libs.items() if lib.feat is not None]
+                    i, d = WR.closest(l["feat"], cents, kind) if cents and l.get("feat") else (None, None)
+                    target = sids[i] if i is not None and d is not None and d < 1.5 else pw.new(kind, l.get("feat"))
+                l["style"], l["kind"], l["kindOk"] = target, kind, True
+            for l in lines:
+                l["kindOk"] = True if l.get("style") in touched or l.get("style") == target else l.get("kindOk")
+            self._relearn(index, touched | {target})
+            pw.drop_empty({l.get("style") for l in lines})
+            return self._result(index, target)
+
+    def keep_lines(self, index, ids):
+        """The lines asked about are fine where they are."""
+        with self.lock:
+            for j in ids:
+                if 0 <= j < len(self.ink.get(index, [])):
+                    self.ink[index][j]["kindOk"] = True
+            return self._result(index)
 
     def rename_style(self, index, sid, name):
         lib = self.writings(index).get(sid)
@@ -1321,7 +1376,7 @@ class Session(EditingMixin, ExtrasMixin):
             else:
                 lib = self._lib(index, sid)
                 xh = height * 0.45 if height else lib.typical_xh()
-            parts = [lib.render(t, xh, _rgb(color) if color else None) if t.strip() else None
+            parts = [lib.render_best(t, xh, _rgb(color) if color else None) if t.strip() else None
                      for t in text.split("\n")]
             if not any(parts):
                 return None
@@ -1333,7 +1388,7 @@ class Session(EditingMixin, ExtrasMixin):
         """Draw text composed with a writing, sitting on `baseline` with x-height `xh`;
         scanned print also gets an invisible text layer, so it can still be searched and
         copied like the original OCR'd scan."""
-        res = lib.render(text, xh, color, max_width_pt=(right if right else page.rect.x1 - 18) - x)
+        res = lib.render_best(text, xh, color, max_width_pt=(right if right else page.rect.x1 - 18) - x)
         if not res:
             return None
         top = baseline + res["top_offset_pt"]

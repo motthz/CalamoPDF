@@ -235,10 +235,13 @@ class EditingMixin:
                             "content": "" if t == "Stamp" else info.get("content", ""),
                             "color": _rgbhex(a.colors.get("stroke") or a.colors.get("fill"))})
             area = abs(page.rect)
+            from .graphics import image_role
             for im in page.get_image_info(xrefs=True):
                 r = fitz.Rect(im["bbox"]) & page.rect
                 if not im.get("xref") or r.is_empty or abs(r) > area * 0.6:
                     continue                    # the scan behind the page is not an object
+                if image_role(self.doc, im["xref"]) in ("Cover", "Ink"):
+                    continue                    # paper rebuilt by Calamo, writing (it is a line)
                 if im.get("width", 9) <= 2 and im.get("height", 9) <= 2:
                     continue                    # what is left of a deleted picture
                 out.append({"id": im["xref"], "src": "image", "type": "Image", "label": "Immagine",
