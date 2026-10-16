@@ -68,11 +68,26 @@ const ok = (name, cond, extra = "") => { console.log((cond ? "PASS " : "FAIL ") 
   console.log("   voci: " + (voices.join(", ") || "nessuna"));
   if (!voices.length) console.log("SKIP lettura ad alta voce: nessuna voce in questo browser");
   else {
-    await p.evaluate(() => { window.__said = []; const sp = speechSynthesis.speak.bind(speechSynthesis); speechSynthesis.speak = u => { const end = u.onend; u.onend = e => { window.__said.push(u.text); end && end(e); }; sp(u); }; });
+    // what the app asks the system to say, and how each sentence ends (spoken, or an error)
+    await p.evaluate(() => {
+      window.__said = [];
+      const sp = speechSynthesis.speak.bind(speechSynthesis);
+      speechSynthesis.speak = u => {
+        const rec = { text: u.text, voice: u.voice ? u.voice.name : "", end: null };
+        window.__said.push(rec);
+        u.addEventListener("end", () => { rec.end = "end"; });
+        u.addEventListener("error", e => { rec.end = "error:" + e.error; });
+        sp(u);
+      };
+    });
     await p.click("#btnSpeak");
     let said = [];
-    for (let i = 0; i < 60 && !said.length; i++) { await W(500); said = await p.evaluate(() => window.__said); }
-    ok("lettura ad alta voce: frase pronunciata dalla voce di sistema", said.length > 0 && said[0].includes("Buongiorno"), said[0] || "");
+    for (let i = 0; i < 60 && !(said.length && said[0].end); i++) { await W(500); said = await p.evaluate(() => window.__said); }
+    const first = said[0] || {};
+    console.log("   frase: " + JSON.stringify(first));
+    ok("lettura ad alta voce: la frase va a una voce di sistema", (first.text || "").includes("Buongiorno") && voices.some(v => v.startsWith(first.voice)), first.voice);
+    if (first.end && first.end.startsWith("error:audio")) console.log("SKIP pronuncia: questa macchina non ha un'uscita audio (" + first.end + ")");
+    else ok("lettura ad alta voce: frase pronunciata fino alla fine", first.end === "end", first.end);
     await p.keyboard.press("Escape");
   }
   ok("nessun errore JavaScript", errs.length === 0, errs.join(" | "));
