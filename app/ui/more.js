@@ -554,7 +554,8 @@ function multiSelectDown(P, e) {
 }
 function updateMulti() {
   const n = S.multi.length;
-  $("#multiCount").textContent = n > 1 ? `${n} elementi` : n === 1 ? "1 elemento (rispetto alla pagina)" : "Maiusc+clic per sceglierne più d'uno";
+  $("#multiCount").textContent = n > 1 ? `${n} elementi` : n === 1 ? "1 elemento" : "";
+  $("#alignBtns").title = n ? "" : "Maiusc+clic sugli elementi per sceglierne più d'uno";
   $$("#alignBtns button").forEach(b => { b.disabled = !n && !S.sel || (b.dataset.al.startsWith("dist") && n < 3); });
 }
 function drawMulti(P, frag, s) {

@@ -16,6 +16,7 @@ import base64
 import io
 import os
 import random
+import re
 
 import pymupdf as fitz
 import numpy as np
@@ -309,6 +310,7 @@ class HandwritingLibrary:
         """line: ink line dict with 'words' (text,bbox) and corrected 'text'."""
         if src is not None:
             self.forget(src)
+        self._trusted_line = line.get("source") == "user"
         if line.get("synthetic") or line.get("source") == "unread" or \
                 (line.get("source") == "ocr" and line.get("doubt", 0) > 0.4):
             return
@@ -452,35 +454,124 @@ class HandwritingLibrary:
         segs, quality = self._split(ink, len(label), X * 2.2)
         if len(segs) != len(label):
             return
+        if quality == 1.0 and not _widths_plausible(label, segs):
+            quality = 0.5          # as many pieces as letters, but not those letters
         if self.kind == "print" and quality < 1.0:
             return            # print letters are separate: a forced cut means the labels would be wrong
         if quality == 1.0:
             for s0, s1 in zip(segs, segs[1:]):
                 self.gaps.append((s1[0] - s0[1]) / X)
-        if len(self.words) < 80 and len(label) >= 2:
+        strokes = self._strokes(ink)
+        if len(self.words) < 80 and len(label) >= 2 and self._reusable(label, (segs[-1][1] - segs[0][0]) / X):
             a0 = segs[0][0]
-            self.words.append({"text": label, "alpha": alpha[:, a0:segs[-1][1]].copy(), "base": base_px, "X": X,
-                               "segs": [(a - a0, b - a0, jl, jr) for a, b, jl, jr in segs], "src": src})
+            self.words.append({"text": label, "alpha": _body_only(alpha, ink, strokes, base_px, X)[:, a0:segs[-1][1]].copy(),
+                               "base": base_px, "X": X,
+                               "segs": [(a - a0, b - a0, jl, jr) for a, b, jl, jr in segs], "src": src,
+                               "exact": quality == 1.0})
         for ch, (a, b, jl, jr) in zip(label, segs):
             g = self._cut(ink, alpha, a, b, base_px, X, jl, jr, src,
-                          quality if (jl or jr) else max(quality, 0.8))
+                          quality if (jl or jr) else max(quality, 0.8), labels=strokes)
             if g is None:
                 continue
+            if ch.isalnum() and not _solid(g, ch):
+                continue           # a speck or a shred, not a letter
             bucket = self.glyphs.setdefault(ch, [])
             if len(bucket) < 12:
                 bucket.append(g)
         self.words_seen += 1
 
+    def _reusable(self, label, width_xh):
+        """A whole word is reused (and its syllables) only when the reading is surely right:
+        corrected by the user, or an Italian word / a number as wide as such a word is. A
+        misread word would otherwise come back, with the wrong letters, whenever its text is
+        written."""
+        exp = fitz.Font("helv").text_length(label, fontsize=1) / 0.52       # in x-heights
+        if not (0.5 <= width_xh / max(exp, 0.1) <= 2.0):
+            return False
+        if getattr(self, "_trusted_line", False):
+            return True
+        from .lexicon import LEXICON
+        core = label.strip(".,;:!?()\"'«»")
+        return bool(core) and (bool(re.fullmatch(r"[\d/.,:%-]+", core)) or LEXICON.known(core))
+
     @staticmethod
-    def _cut(ink, alpha, a, b, base_px, X, jl, jr, src=None, quality=1.0, manual=False):
-        """One letter: its image and where it sits, in x-heights from the baseline."""
+    def _cut(ink, alpha, a, b, base_px, X, jl, jr, src=None, quality=1.0, manual=False, labels=None):
+        """One letter: its image and where it sits, in x-heights from the baseline.
+        labels (the strokes of the word, see _strokes): a stroke that lies mostly outside
+        these columns belongs to a neighbouring letter (slanted writing reaches over) and
+        is left out; strokes running through several letters (joined writing) stay."""
         col_ink = ink[:, a:b]
-        rows = np.where(col_ink.any(axis=1))[0]
+        keep = None
+        if labels is not None:
+            lab, stats = labels
+            keep = col_ink.copy()
+            band0, band1 = base_px - X * 1.05, base_px + X * 0.15       # where the body of letters is
+            for k in np.unique(lab[:, a:b][col_ink]):
+                x0, x1, total, y0, y1 = stats[k]
+                inside = int((lab[:, a:b] == k).sum())
+                if (inside < total * 0.3 and x1 - x0 < (b - a) * 2.2) or y1 < band0 or y0 > band1:
+                    # a stroke of the next letter, or something above / below the line
+                    # (the small print of a form, a mark): not part of this letter
+                    keep &= lab[:, a:b] != k
+            if not keep.any():
+                keep = None
+        rows = np.where((keep if keep is not None else col_ink).any(axis=1))[0]
         if len(rows) == 0:
             return None
         r0, r1 = rows[0], rows[-1] + 1
-        return Glyph(alpha[r0:r1, a:b].copy(), (r0 - base_px) / X, (r1 - base_px) / X, (b - a) / X,
+        img = alpha[r0:r1, a:b].copy()
+        if keep is not None:
+            # the soft edges of the strokes kept, nothing of the strokes removed
+            from PIL import Image as _I, ImageFilter as _F
+            grow = np.array(_I.fromarray((keep[r0:r1] * 255).astype(np.uint8)).filter(_F.MaxFilter(5))) > 0
+            img = np.where(grow, img, 0).astype(img.dtype)
+        return Glyph(img, (r0 - base_px) / X, (r1 - base_px) / X, (b - a) / X,
                      jl, jr, src, quality, manual)
+
+    @staticmethod
+    def _strokes(ink):
+        """Connected strokes of a word: a label per pixel (0 = paper) and, for each label,
+        (first column, last column, pixels, first row, last row)."""
+        H, W = ink.shape
+        parent = [0]
+
+        def find(x):
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+        runs, prev = [], []
+        for y in range(H):
+            row = ink[y]
+            if not row.any():
+                prev = []
+                continue
+            d = np.diff(np.concatenate(([0], row.view(np.int8), [0])))
+            cur = []
+            j = 0
+            for s0, e0 in zip(np.where(d == 1)[0], np.where(d == -1)[0]):
+                lab = len(parent)
+                parent.append(lab)
+                while j < len(prev) and prev[j][1] < s0:
+                    j += 1
+                k = j
+                while k < len(prev) and prev[k][0] <= e0:      # 8-connected
+                    ra, rb = find(lab), find(prev[k][2])
+                    if ra != rb:
+                        parent[rb] = ra
+                    k += 1
+                cur.append((s0, e0, lab))
+                runs.append((y, s0, e0, lab))
+            prev = cur
+        out = np.zeros((H, W), np.int32)
+        stats = {}
+        for y, s0, e0, lab in runs:
+            r = find(lab)
+            out[y, s0:e0] = r
+            st = stats.get(r)
+            stats[r] = (min(st[0], s0), max(st[1], e0), st[2] + e0 - s0, min(st[3], y), max(st[4], y + 1)) \
+                if st else (s0, e0, e0 - s0, y, y + 1)
+        return out, stats
 
     # ------------------------------------------------------------------ marking letters by hand
     @staticmethod
@@ -897,7 +988,10 @@ class HandwritingLibrary:
             return None
         for n in range(len(word) - i, 1, -1):
             sub = word[i:i + n]
-            found = [(w, w["text"].find(sub)) for w in self.words if sub in w["text"]]
+            # a piece of a word is only as good as the cuts between its letters: where they
+            # were forced (joined letters), only the whole word is reused
+            found = [(w, w["text"].find(sub)) for w in self.words
+                     if sub in w["text"] and (w.get("exact", True) or sub == w["text"])]
             if not found:
                 continue
             w, k = rnd.choice(found)
@@ -909,6 +1003,9 @@ class HandwritingLibrary:
                 continue
             r0, r1 = rows[0], rows[-1] + 1
             X = w["X"]
+            # measured on a badly sized line, a piece would come out tiny or huge
+            if not (0.6 <= (r1 - r0) / X <= 4.0 and 0.3 <= (b - a) / X / n <= 2.6):
+                continue
             return Glyph(alpha[r0:r1].copy(), (r0 - w["base"]) / X, (r1 - w["base"]) / X, (b - a) / X,
                          segs[0][2], segs[-1][3], quality=1.0), n
         return None
@@ -945,6 +1042,45 @@ class HandwritingLibrary:
             res["height_pt"] *= f
             res["top_offset_pt"] *= f
         return res
+
+
+def _body_only(alpha, ink, strokes, base_px, X):
+    """The word without what lies wholly above or below its line (the small print of a
+    form, a mark in the margin)."""
+    lab, stats = strokes
+    band0, band1 = base_px - X * 1.05, base_px + X * 0.15
+    away = [k for k, st in stats.items() if st[4] < band0 or st[3] > band1]
+    if not away:
+        return alpha
+    drop = np.isin(lab, away)
+    keep = ink & ~drop
+    grow = np.array(Image.fromarray((keep * 255).astype(np.uint8)).filter(ImageFilter.MaxFilter(5))) > 0
+    return np.where(grow & ~(drop & ~keep), alpha, 0).astype(alpha.dtype)
+
+
+def _solid(g, ch):
+    """A letter or digit has a body: at least about half an x-height tall (an "x"), and
+    some ink. Specks of the scan or shreds of a cut do not."""
+    h = g.bottom - g.top                       # in x-heights
+    if h < (0.55 if ch.isalpha() and ch.islower() and ch not in "ilj" else 0.75) or h > 4.5:
+        return False
+    if not 0.12 <= g.width <= 3.0:
+        return False
+    a = g.alpha
+    ink = (a > 100).sum()
+    return ink >= a.shape[0] * 1.5 and a.shape[1] >= 2
+
+
+def _widths_plausible(label, segs):
+    """Do the pieces cut from a word have the widths of its letters? An "i" is narrow, an
+    "m" wide: when the pieces disagree with that, the letters were not cut where they are."""
+    if len(label) < 3:
+        return True
+    ref = fitz.Font("helv")
+    exp = np.array([max(ref.text_length(c, fontsize=1), 0.2) for c in label])
+    got = np.array([max(s[1] - s[0], 1) for s in segs], dtype=np.float64)
+    ratio = (got / got.sum()) / (exp / exp.sum())
+    return bool(ratio.min() > 0.33 and ratio.max() < 2.6)
 
 
 # --------------------------------------------------------------------------- the writings of a page

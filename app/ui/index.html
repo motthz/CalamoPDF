@@ -136,9 +136,9 @@
       <button class="tb-btn" data-cmd="find" data-tip="Trova e sostituisci  Ctrl+F" data-need-doc><svg><use href="#i-search"/></svg></button>
       <button class="tb-btn" data-cmd="speak" id="btnSpeak" data-tip="Leggi ad alta voce" data-need-doc><svg><use href="#i-speak"/></svg></button>
       <button class="tb-btn" data-cmd="present" data-tip="Presentazione a schermo intero  F5" data-need-doc><svg><use href="#i-present"/></svg></button>
-      <button class="btn ghost" data-cmd="analyze" data-need-doc><svg><use href="#i-read"/></svg><span>Leggi scrittura</span></button>
+      <button class="btn ghost" data-cmd="analyze" data-need-doc data-tip="Leggi la scrittura a mano della pagina"><svg><use href="#i-read"/></svg><span>Leggi scrittura</span></button>
       <div class="menu-wrap">
-        <button class="btn primary" data-cmd="exportMenu" data-need-doc><svg><use href="#i-export"/></svg><span>Esporta</span><svg class="chev"><use href="#i-chev-down"/></svg></button>
+        <button class="btn primary" data-cmd="exportMenu" data-need-doc data-tip="Esporta in Word, Excel o PDF"><svg><use href="#i-export"/></svg><span>Esporta</span><svg class="chev"><use href="#i-chev-down"/></svg></button>
         <div class="menu" id="exportMenu" hidden>
           <button data-cmd="exportDocx"><svg class="ic-word"><use href="#i-word"/></svg><div><b>Word</b><small>Documento .docx modificabile</small></div></button>
           <button data-cmd="exportXlsx"><svg class="ic-excel"><use href="#i-excel"/></svg><div><b>Excel</b><small>Tabelle in fogli .xlsx</small></div></button>
@@ -167,7 +167,7 @@
         <div class="opts" data-opts="annotate">
           <div class="seg-switch" id="annKind">
             <button data-k="highlight" class="active" title="Evidenzia il testo trascinato"><svg><use href="#i-marker"/></svg>Evidenzia</button>
-            <button data-k="underline" title="Sottolinea"><u>S</u>ottolinea</button>
+            <button data-k="underline" title="Sottolinea"><span><u>S</u>ottolinea</span></button>
             <button data-k="strike" title="Barra"><s>Barra</s></button>
             <button data-k="note" title="Nota: clicca dove lasciarla"><svg><use href="#i-note"/></svg>Nota</button>
             <button data-k="rect" title="Rettangolo">▭</button>
@@ -189,7 +189,7 @@
           <span class="muted small">Trascina sull'area da oscurare: testo e immagini sotto vengono eliminati davvero. Per cercare dati come codici fiscali o IBAN usa la scheda <b>Documento</b>.</span>
         </div>
         <div class="opts" data-opts="select">
-          <span class="muted small">Prendi e trascina qualsiasi elemento: testo, scritte a mano, firme, immagini, note, forme. Angolo per ridimensionare, <kbd>Canc</kbd> per eliminare.</span>
+          <span class="muted small" title="Trascina testi, scritte a mano, firme, immagini, note e forme. Angolo per ridimensionare, Canc per eliminare, doppio clic su una nota per scriverci.">Trascina gli elementi · <kbd>Canc</kbd> elimina</span>
           <button class="btn ghost sm" id="objReplace" disabled><svg><use href="#i-image"/></svg>Sostituisci immagine</button>
           <button class="btn ghost sm" id="objCrop" disabled>Ritaglia</button>
           <button class="btn ghost sm danger-text" id="objDelete" disabled><svg><use href="#i-trash"/></svg>Elimina</button>
