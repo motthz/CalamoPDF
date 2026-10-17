@@ -3,10 +3,12 @@
 from PyInstaller.utils.hooks import collect_submodules, collect_data_files, collect_dynamic_libs
 
 hidden = (collect_submodules("winrt") + collect_submodules("webview.platforms")
-          + ["clr", "openpyxl", "docx", "onnxruntime", "tokenizers"])
+          + collect_submodules("pyhanko") + collect_submodules("pyhanko_certvalidator") + collect_submodules("pptx")
+          + ["clr", "openpyxl", "docx", "onnxruntime", "tokenizers", "oscrypto", "asn1crypto", "tzlocal"])
 # the Italian word list; the handwriting model itself is downloaded on first use
 datas = ([("app/ui", "ui"), ("assets/icon.ico", "assets"), ("app/engine/data", "engine/data")]
-         + collect_data_files("webview") + collect_data_files("docx") + collect_data_files("onnxruntime"))
+         + collect_data_files("webview") + collect_data_files("docx") + collect_data_files("onnxruntime")
+         + collect_data_files("pptx") + collect_data_files("pyhanko") + collect_data_files("pyhanko_certvalidator"))
 binaries = collect_dynamic_libs("onnxruntime")
 
 a = Analysis(

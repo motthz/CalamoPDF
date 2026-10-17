@@ -62,6 +62,19 @@ def make_docs():
         for k in range(3):
             d.new_page(width=420, height=595).insert_text((60, 80), f"{name.upper()}{k + 1}", fontsize=40)
         d.save(os.path.join(WORK, name + ".pdf"))
+    # a form made for paper, with headings (forms, bookmarks, links, signatures)
+    d = fitz.open()
+    p = d.new_page(width=595, height=842)
+    p.insert_text((60, 60), "Modulo di iscrizione", fontsize=18)
+    p.insert_text((60, 110), "Nome: ____________________", fontsize=11)
+    p.insert_text((60, 140), "Cognome: .......................................", fontsize=11)
+    p.draw_rect((60, 190, 72, 202), color=(0, 0, 0), width=0.8)
+    p.insert_text((78, 200), "Accetto le condizioni", fontsize=11)
+    for k in range(2):
+        q = d.new_page(width=595, height=842)
+        q.insert_text((60, 80), f"Capitolo {k + 1}", fontsize=20)
+        q.insert_text((60, 120), "Testo normale del capitolo, con qualche parola.", fontsize=11)
+    d.save(os.path.join(WORK, "modulo.pdf"))
     # a page to read aloud
     d = fitz.open()
     d.new_page().insert_text((72, 100), "Buongiorno. Questa è una prova di lettura ad alta voce.", fontsize=14)

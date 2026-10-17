@@ -37,7 +37,7 @@ segSwitch($("#annKind"), "k", k => { S.ann = k; S.annColor = null; drawSwatches(
 segSwitch($("#insKind"), "k", k => {
   S.ins = k;
   $("#sigPick").hidden = $("#sigNew").hidden = k !== "signature";
-  $("#insHint").textContent = k === "signature" ? "Clicca sulla pagina dove mettere la firma." : "Clicca sulla pagina dove mettere l'immagine: poi scegli il file.";
+  if (typeof updateHint === "function") updateHint();
 });
 function drawSwatches() {
   const cur = annColor();

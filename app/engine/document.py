@@ -19,6 +19,7 @@ from .lexicon import LEXICON, WORD_RE
 from .editing import EditingMixin
 from .extras import ExtrasMixin
 from .graphics import GraphicsMixin, tag_image
+from .pdftools import PdfToolsMixin
 from .ocr import PRINT_BELOW, Learning, prepare_page, read_page, read_region
 
 # search expands typographic ligatures ("ﬃ" is found by "ffi")
@@ -191,7 +192,7 @@ def _find_in_line(line, term):
     return out
 
 
-class Session(EditingMixin, ExtrasMixin, GraphicsMixin):
+class Session(EditingMixin, ExtrasMixin, GraphicsMixin, PdfToolsMixin):
     MAX_UNDO = 40
 
     def __init__(self):
@@ -218,8 +219,10 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin):
             if doc.needs_pass:
                 if not password:
                     raise RuntimeError("PASSWORD_REQUIRED")
-                if not doc.authenticate(password):
+                self._auth = doc.authenticate(password)
+                if not self._auth:
                     raise RuntimeError("PASSWORD_WRONG")
+                self._perm = doc.permissions
             self.doc, self.path = doc, path
             self._password = password
             self.dirty = False
@@ -261,15 +264,27 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin):
                  for i, p in enumerate(self.doc)]
         return {"path": self.path, "name": os.path.basename(self.path) if self.path else (self.title or "Senza titolo.pdf"),
                 "pages": pages, "dirty": self.dirty, "canUndo": bool(self.undo_stack),
-                "canRedo": bool(self.redo_stack), "analyzed": sorted(self.ink.keys())}
+                "canRedo": bool(self.redo_stack), "analyzed": sorted(self.ink.keys()),
+                "protected": bool(getattr(self, "_password", None)), "forms": bool(self.doc.is_form_pdf)}
 
     def save(self, path=None):
         with self.lock:
             target = path or self.path
             if not target:
                 raise RuntimeError("Nessun percorso di salvataggio.")
+            if not self.dirty and self.path and os.path.exists(self.path) and \
+                    os.path.normcase(os.path.abspath(target)) == os.path.normcase(os.path.abspath(self.path)):
+                return self.info()                  # nothing changed: the file (and its signatures) stays as it is
             tmp = target + ".calamo-tmp"
-            self.doc.save(tmp, garbage=3, deflate=True, clean=False)
+            # a document opened with its password stays protected by it, with the same limits
+            # (the document in memory is no longer encrypted after an undo: protect it again)
+            crypt = {}
+            if getattr(self, "_password", None):
+                import secrets
+                owner = self._password if getattr(self, "_auth", 0) & 4 else secrets.token_hex(16)
+                crypt = dict(encryption=fitz.PDF_ENCRYPT_AES_256, user_pw=self._password, owner_pw=owner,
+                             permissions=getattr(self, "_perm", -1))
+            self.doc.save(tmp, garbage=3, deflate=True, clean=False, **crypt)
             os.replace(tmp, target)
             # saving compacts the document in memory and renumbers its objects; PyMuPDF's
             # record of the fonts already written then points at the wrong objects, and text
@@ -573,7 +588,8 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin):
                 })
             styles = self.hands[index].listing(self.ink.get(index, [])) if index in self.hands else []
             return {"blocks": out, "ink": self._ink_public(index), "styles": styles,
-                    "objects": self.objects(index), "version": self.page_versions.get(index, 0)}
+                    "objects": self.objects(index), "links": self.links(index),
+                    "version": self.page_versions.get(index, 0)}
 
     def _raw_block(self, page, ref):
         """ref: block bbox (preferred - indices shift after edits) or index."""

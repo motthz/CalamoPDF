@@ -812,6 +812,8 @@ class EditingMixin:
             today = datetime.date.today().strftime("%d/%m/%Y")
             fname = os.path.splitext(os.path.basename(self.path or "Documento.pdf"))[0]
             wm = (spec.get("watermark") or "").strip()
+            bates0 = int(spec.get("bates_start") or 1)          # Bates numbering: PREFIX000001...
+            digits = max(1, min(int(spec.get("bates_digits") or 6), 12))
             if not (spec.get("header") or "").strip() and not (spec.get("footer") or "").strip() and not wm:
                 raise RuntimeError("Scrivi un'intestazione, un piè di pagina o una filigrana.")
             self._checkpoint()
@@ -820,8 +822,9 @@ class EditingMixin:
                 R = page.rect
 
                 def fill(t):
+                    bates = f"{spec.get('bates_prefix') or ''}{str(bates0 + k).zfill(digits)}"
                     return (t.replace("{n}", str(start + k)).replace("{N}", str(start + len(pages) - 1))
-                            .replace("{data}", today).replace("{file}", fname))
+                            .replace("{data}", today).replace("{file}", fname).replace("{bates}", bates))
                 for key, y in (("header", R.y0 + margin), ("footer", R.y1 - margin + size * 0.8)):
                     t = fill((spec.get(key) or "").strip())
                     if not t:

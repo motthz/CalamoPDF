@@ -32,6 +32,9 @@ jobs:
           CALAMO_GITHUB_TOKEN: ${{ github.token }}
         run: python tools/test_windows.py
 
+      - name: PDF tools tests (forms, pages, PDF/A, signatures, export, many files)
+        run: python tools/test_pdftools.py
+
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -45,6 +48,10 @@ jobs:
           if (-not (Get-CimInstance Win32_SoundDevice)) { $env:NO_AUDIO = "1"; "Nessuna scheda audio su questa macchina" }
           $srv = Start-Process python -ArgumentList "tools/ui_harness.py", "build/uitest" -PassThru -NoNewWindow
           try { node tools/ui_test.js build/uitest; if ($LASTEXITCODE -ne 0) { throw "interface test failed" } }
+          finally { Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue }
+          Start-Sleep -Seconds 2
+          $srv = Start-Process python -ArgumentList "tools/ui_harness.py", "build/uitest2" -PassThru -NoNewWindow
+          try { node tools/ui_test_suite.js build/uitest2; if ($LASTEXITCODE -ne 0) { throw "interface test (tools) failed" } }
           finally { Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue }
 
       - name: Build CalamoPDF.exe

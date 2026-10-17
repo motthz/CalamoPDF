@@ -1,3 +1,23 @@
+## Novità di Calamo PDF Studio 1.5.0
+
+**Tutti gli strumenti dei grandi programmi per PDF, più facili da trovare.**
+- **Strumenti** (Ctrl+K): una finestra con tutte le funzioni divise per argomento e una casella di ricerca ("comprimi", "firma", "word"…). Se una funzione lavora su un documento e non ne hai aperto nessuno, Calamo ti chiede prima quale.
+- **Schermata iniziale** con le attività più comuni: modifica, unisci, dividi, comprimi, converti, PDF in Word, compila, firma.
+- **Barra più semplice**: gli strumenti principali hanno il nome sempre visibile, gli altri sono nel menu **Altro**. Sotto la barra un **suggerimento** spiega come si usa lo strumento scelto.
+- **Pannelli a destra riordinati**: Scrittura, Pagine, Moduli, Sicurezza, Documento, Commenti. Impostazioni e guida nei pulsanti ⚙ e ? in alto; guida rinnovata.
+
+**Moduli.** Compila i campi direttamente sulla pagina (Compila, tasto C); crea campi di testo, caselle, scelte, menu a tendina e spazi per la firma trascinando un riquadro; **Riconosci i campi** trova da solo righe, puntini e caselle di un modulo pensato per la carta e li rende compilabili, con il nome preso dal testo accanto; **Appiattisci** campi e commenti.
+
+**Firma digitale con certificato** (PAdES): con un file `.p12`/`.pfx` o con un certificato personale creato in Calamo, in un nuovo riquadro o in un campo firma già presente, con marca temporale facoltativa. **Verifica firme**: chi ha firmato, quando, e se il documento è cambiato dopo la firma. Salvare sopra un PDF firmato ora avvisa che le firme non sarebbero più valide.
+
+**Pagine.** Ritaglia trascinando un riquadro, togliendo dei millimetri o solo i margini bianchi; cambia formato (A4, A3, A5, Lettera, Legale); più pagine per foglio e **opuscolo** da piegare; **segnalibri** nella barra a sinistra (anche creati dai titoli); **collegamenti** a siti web o ad altre pagine.
+
+**Documento.** Proprietà (titolo, autore, oggetto, parole chiave, lingua); **verifica** PDF/A e accessibilità con il pulsante per sistemare ogni punto; copia **PDF/A** per l'archiviazione e gli uffici pubblici; numerazione **Bates**; **bianco e nero**; togli la **password** (copia o documento aperto).
+
+**Esporta** anche in **PowerPoint** (testo modificabile sopra lo sfondo della pagina), **pagina web** e **testo**. **Stampa** con Ctrl+P. **Ripara** i PDF danneggiati. **Elabora più file insieme**: comprimi, numera, filigrana, ruota, proteggi o togli la password, PDF/A, appiattisci, bianco e nero, ripara.
+
+**Correzioni.** Un PDF aperto con la password veniva salvato senza protezione: ora resta protetto con la stessa password e gli stessi permessi (anche dopo Annulla). Salvare un documento senza modifiche non riscrive più il file.
+
 ## Novità di Calamo PDF Studio 1.4.2
 
 **Trascina qualsiasi elemento della pagina.** Con lo strumento *Modifica* (o *Oggetti*) si prende e si sposta ogni cosa, non solo le scritte:

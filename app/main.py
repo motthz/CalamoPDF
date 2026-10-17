@@ -21,6 +21,8 @@ from engine import export  # noqa: E402
 from engine import files as FILES  # noqa: E402
 from engine import convert as CONVERT  # noqa: E402
 from engine import extras as EX  # noqa: E402
+from engine import batch as BATCH  # noqa: E402
+from engine import signing as SIGN  # noqa: E402
 from engine import fonts as F  # noqa: E402
 from engine import handwriting as HW  # noqa: E402
 from engine.handreader import READER  # noqa: E402
@@ -29,7 +31,7 @@ from engine.ocr import available_languages  # noqa: E402
 from engine.storage import load_json, save_json  # noqa: E402
 import updater  # noqa: E402
 
-VERSION = "1.4.2"
+VERSION = "1.5.0"
 
 _user32 = ctypes.windll.user32
 _user32.FindWindowW.restype = wintypes.HWND
@@ -730,6 +732,202 @@ class Api:
             sheets = export.to_xlsx(self._s.doc, self._s.ink, path, self._progress("Esportazione in Excel"))
         return {"path": path, "name": os.path.basename(path), "sheets": sheets}
 
+    # ---------------------------------------------------------------- forms
+    @safe
+    def fields(self, index=None):
+        return self._s.fields(index)
+
+    @safe
+    def fill_fields(self, values):
+        return self._s.fill_fields(values)
+
+    @safe
+    def add_field(self, index, kind, rect, name="", options=None, multiline=False):
+        return self._s.add_field(index, kind, rect, name, options, multiline)
+
+    @safe
+    def edit_field(self, index, xref, name=None, options=None, multiline=None, required=None):
+        return self._s.edit_field(index, xref, name, options, multiline, required)
+
+    @safe
+    def delete_field(self, index, xref):
+        return self._s.delete_field(index, xref)
+
+    @safe
+    def detect_fields(self, spec=""):
+        return self._s.detect_fields(spec)
+
+    @safe
+    def flatten(self, forms=True, annots=True):
+        return self._s.flatten(forms, annots)
+
+    # ---------------------------------------------------------------- page size, crop, sheets
+    @safe
+    def crop_pages(self, spec="", rect=None, margins=None, auto=False):
+        return self._s.crop_pages(spec, rect, margins, auto)
+
+    @safe
+    def reset_crop(self, spec=""):
+        return self._s.reset_crop(spec)
+
+    @safe
+    def resize_pages(self, spec="", size="A4", width=None, height=None):
+        return self._s.resize_pages(spec, size, width, height)
+
+    @safe
+    def make_nup(self, cols, rows, size="A4", spec="", border=False):
+        data = self._s.nup_bytes(cols, rows, size, spec, border)
+        return {"info": self._adopt_bytes(data, f"{self._base()} - {int(cols) * int(rows)} per foglio.pdf")}
+
+    @safe
+    def make_booklet(self, size="A4"):
+        data = self._s.booklet_bytes(size)
+        return {"info": self._adopt_bytes(data, f"{self._base()} - opuscolo.pdf")}
+
+    # ---------------------------------------------------------------- bookmarks, links, properties
+    @safe
+    def bookmarks(self):
+        return self._s.bookmarks()
+
+    @safe
+    def set_bookmarks(self, items):
+        return self._s.set_bookmarks(items)
+
+    @safe
+    def bookmarks_from_headings(self):
+        return self._s.bookmarks_from_headings()
+
+    @safe
+    def links(self, index):
+        return self._s.links(index)
+
+    @safe
+    def add_link(self, index, rect, uri=None, target_page=None):
+        return self._s.add_link(index, rect, uri, target_page)
+
+    @safe
+    def delete_link(self, index, xref):
+        return self._s.delete_link(index, xref)
+
+    @safe
+    def open_url(self, url):
+        import webbrowser
+        if not re.match(r"^(https?|mailto):", url or "", re.I):
+            raise RuntimeError("Questo collegamento non è un indirizzo web.")
+        webbrowser.open(url)
+        return True
+
+    @safe
+    def properties(self):
+        return self._s.properties()
+
+    @safe
+    def set_properties(self, props):
+        return self._s.set_properties(props)
+
+    # ---------------------------------------------------------------- password, colour, archive
+    @safe
+    def save_unlocked(self):
+        path = self._pick_save(f"{self._base()} - senza password.pdf")
+        return self._s.save_unlocked(path) if path else None
+
+    @safe
+    def remove_password(self):
+        return self._s.remove_password()
+
+    @safe
+    def to_grayscale(self):
+        return self._s.to_grayscale()
+
+    @safe
+    def preflight(self):
+        return self._s.preflight()
+
+    @safe
+    def save_pdfa(self):
+        path = self._pick_save(f"{self._base()} - PDF-A.pdf")
+        return self._s.save_pdfa(path) if path else None
+
+    @safe
+    def export_other(self, kind):
+        """PowerPoint, web page (HTML) or plain text."""
+        ext, label = {"pptx": ("pptx", "Presentazione PowerPoint"), "html": ("html", "Pagina web"),
+                      "txt": ("txt", "Testo")}[kind]
+        path = self._ask_export_path(ext, label)
+        if not path:
+            return None
+        if kind == "pptx":
+            return self._s.export_pptx(path, self._progress("Esportazione in PowerPoint"))
+        if kind == "html":
+            return self._s.export_html(path)
+        return self._s.export_text(path)
+
+    # ---------------------------------------------------------------- digital signatures
+    @safe
+    def certificates(self):
+        return SIGN.list_certificates()
+
+    @safe
+    def create_certificate(self, name, email="", org="", password=""):
+        c = SIGN.create_certificate(name, email, org, password)
+        return {"created": c, "list": SIGN.list_certificates()}
+
+    @safe
+    def import_certificate(self):
+        import shutil
+        path = self._pick("Certificati digitali", ["p12", "pfx"])
+        if not path:
+            return None
+        dst = os.path.join(SIGN.cert_dir(), os.path.basename(path))
+        if os.path.normcase(os.path.abspath(dst)) != os.path.normcase(os.path.abspath(path)):
+            shutil.copyfile(path, dst)
+        return {"created": {"path": dst, "name": os.path.splitext(os.path.basename(dst))[0]},
+                "list": SIGN.list_certificates()}
+
+    @safe
+    def certificate_info(self, path, password):
+        return SIGN.certificate_info(path, password)
+
+    @safe
+    def sign_digital(self, cert_path, password, index=0, rect=None, field=None, reason="", location="", tsa=""):
+        """Signed into a new file, opened in a tab: a signed PDF must not be changed after."""
+        path = self._pick_save(f"{self._base()} - firmato.pdf")
+        if not path:
+            return None
+        res = self._s.sign_digital(path, cert_path, password, index, rect, field, reason, location, tsa)
+        if self._s.path and os.path.normcase(os.path.abspath(self._s.path)) == os.path.normcase(os.path.abspath(path)):
+            self._s.open(path)                   # the file under the open document was replaced
+            res["info"] = self._s.info()
+        else:
+            res["info"] = self._open(path)
+        return res
+
+    @safe
+    def verify_signatures(self):
+        return self._s.verify_signatures()
+
+    # ---------------------------------------------------------------- repair, many files
+    @safe
+    def repair_file(self):
+        src = self._pick("Documenti PDF", ["pdf"])
+        if not src:
+            return None
+        base = os.path.splitext(os.path.basename(src))[0]
+        out = self._pick_save(f"{base} - riparato.pdf")
+        if not out:
+            return None
+        res = FILES.repair(src, out)
+        res["info"] = self._open(out)
+        return res
+
+    @safe
+    def batch_run(self, paths, action, opts=None):
+        res = self._window.create_file_dialog(_dialog_kind("FOLDER"))
+        if not res:
+            return None
+        folder = res[0] if isinstance(res, (list, tuple)) else res
+        return BATCH.run(paths, action, opts or {}, folder, self._progress("Elaborazione dei file"))
+
     @safe
     def reveal(self, path):
         os.startfile(path)
@@ -987,6 +1185,18 @@ def selftest(pdf, out):
     export.to_docx(s.doc, s.ink, os.path.join(tmp, "t.docx"))
     report["sheets"] = export.to_xlsx(s.doc, s.ink, os.path.join(tmp, "t.xlsx"))
     s.save(os.path.join(tmp, "t.pdf"))
+    # the libraries of 1.5: PowerPoint, PDF/A, digital signature (missing modules show up only in the exe)
+    report["pptx"] = s.export_pptx(os.path.join(tmp, "t.pptx"))["slides"]
+    report["pdfa"] = s.save_pdfa(os.path.join(tmp, "a.pdf"))["ok"]
+    cert = SIGN.create_certificate("Selftest Calamo", "", "", "selftest")
+    try:
+        s.sign_digital(os.path.join(tmp, "f.pdf"), cert["path"], "selftest", 0, [300, 700, 500, 760])
+        with open(os.path.join(tmp, "f.pdf"), "rb") as f:
+            report["signature"] = SIGN.verify(f.read())[0]["intact"]
+    finally:
+        os.remove(cert["path"])
+    if not report["signature"]:
+        raise RuntimeError(f"firma digitale non valida: {report}")
     report["ok"] = True
     with open(out, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=1)
