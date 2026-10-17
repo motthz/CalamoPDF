@@ -6,6 +6,7 @@ import re
 import pymupdf as fitz
 
 from .editing import parse_pages
+from .storage import gc
 
 
 def _open(src, password=None):
@@ -62,7 +63,7 @@ def merge(items, out_path, bookmarks=True):
             out.set_toc(toc)
         except Exception:
             out.set_toc([t for t in toc if t[0] == 1])
-    out.save(out_path, garbage=3, deflate=True)
+    out.save(out_path, garbage=gc(out, 3), deflate=True)
     return {"path": out_path, "name": os.path.basename(out_path), "pages": len(out), "files": len(items)}
 
 
@@ -114,7 +115,7 @@ def split(src, base, folder, mode, value=None):
         for i in range(n):
             one = fitz.open()
             one.insert_pdf(doc, from_page=i, to_page=i)
-            w = len(one.tobytes(garbage=3, deflate=True))
+            w = len(one.tobytes(garbage=gc(one, 3), deflate=True))
             if cur and total + w > limit:
                 groups.append(cur)
                 cur, total = [], 0
@@ -139,7 +140,7 @@ def split(src, base, folder, mode, value=None):
         while os.path.exists(path):
             path = os.path.join(folder, f"{_safe(base)} - {label} ({j}).pdf")
             j += 1
-        out.save(path, garbage=3, deflate=True)
+        out.save(path, garbage=gc(out, 3), deflate=True)
         paths.append(path)
     return {"files": paths, "folder": folder, "pages": n}
 
@@ -177,6 +178,6 @@ def repair(src, out_path):
     except Exception:
         pass
     warnings = fz.TOOLS.mupdf_warnings()
-    out.save(out_path, garbage=4, deflate=True, clean=True)
+    out.save(out_path, garbage=gc(out, 4), deflate=True, clean=True)
     return {"path": out_path, "name": os.path.basename(out_path), "pages": len(out), "bad": bad,
             "repaired": bool(doc.is_repaired or warnings or bad)}

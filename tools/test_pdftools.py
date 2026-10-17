@@ -1,6 +1,7 @@
 """Engine test of the PDF tools: forms, pages, bookmarks, links, properties, security,
 grayscale, PDF/A, export, digital signatures, repair and batch. Runs anywhere (no Windows
 OCR needed).   python tools/test_pdftools.py"""
+import io
 import os
 import shutil
 import sys
@@ -304,8 +305,66 @@ def t_rotated():
     ok("firma su pagina ruotata dove trascinata", sig == [[400, 300, 600, 380]], sig)
 
 
+def t_audit():
+    """Bugs found by the audit of 1.5.1: they must not come back."""
+    s = Session()
+    s.open(os.path.join(ROOT, "samples", "esempio.pdf"))
+    s.add_shape(0, "rect", [40, 160], [430, 260], "#1e40af")
+    s.add_shape(0, "arrow", [480, 300], [420, 230])
+    ts = s.tables(0)
+    ok("un rettangolo sopra la tabella non la rompe", len(ts) == 1 and len(ts[0]["rows"]) == 4 and len(ts[0]["rows"][0]) == 4,
+       [(len(t["rows"]), len(t["rows"][0])) for t in ts])
+    d = fitz.open()
+    p = d.new_page()
+    p.insert_text((72, 72), "Titolo", fontsize=20)
+    w = fitz.Widget()
+    w.field_type, w.rect, w.field_name, w.field_value = fitz.PDF_WIDGET_TYPE_TEXT, fitz.Rect(100, 200, 300, 220), "a", "ValoreCampo"
+    p.add_widget(w)
+    d.save(P("campo.pdf"))
+    s2 = Session()
+    s2.open(P("campo.pdf"))
+    ok("il testo di un campo non è un blocco modificabile", [b["text"] for b in s2.blocks(0)["blocks"]] == ["Titolo"])
+    ok("il valore di un campo non è un titolo", all(b["title"] != "ValoreCampo" for b in s2.bookmarks_from_headings()))
+    # many sensitive data: fast, and the same datum is found once
+    d = fitz.open()
+    for i in range(60):
+        q = d.new_page()
+        for k in range(40):
+            q.insert_text((40, 60 + k * 18), f"IBAN IT60X0542811101000000123456 tel 3331234567 m{k}@example.com", fontsize=9)
+    d.save(P("sensibili.pdf"))
+    s3 = Session()
+    s3.open(P("sensibili.pdf"))
+    import time
+    t = time.time()
+    hits = s3.find_sensitive(["iban", "email", "phone"])
+    dt = time.time() - t
+    ok("dati sensibili: 7200 trovati in pochi secondi", len(hits) == 7200 and dt < 10, f"{len(hits)} in {dt:.1f}s")
+    # undo of a page keeps the bookmarks; the undo copies stay within their memory
+    s3.set_bookmarks([{"level": 1, "title": "Inizio", "page": 0}, {"level": 1, "title": "Pagina 3", "page": 2}])
+    s3.add_text(2, 100, 800, "x", {"family": "Arial", "size": 12, "color": "#000000"})
+    ok("modifica di una pagina: annulla salva solo la pagina", s3.undo_stack[-1][0] == "page")
+    s3.undo()
+    ok("annulla di una pagina tiene i segnalibri", [b["title"] for b in s3.bookmarks()] == ["Inizio", "Pagina 3"])
+    s3.MAX_UNDO_BYTES = 200 * 1024
+    for k in range(6):
+        s3.stamp_pages({"footer": f"giro {k}"})
+    ok("memoria dell'annulla limitata", sum(Session._snap_size(x) for x in s3.undo_stack) <= 200 * 1024 or len(s3.undo_stack) == 1,
+       len(s3.undo_stack))
+    sc = fitz.open()
+    pg = sc.new_page()
+    from PIL import Image as Im
+    buf = io.BytesIO()
+    Im.new("RGB", (800, 1100), (200, 200, 190)).save(buf, "JPEG")
+    pg.insert_image(pg.rect, stream=buf.getvalue())
+    sc.save(P("scan1.pdf"))
+    s4 = Session()
+    s4.open(P("scan1.pdf"))
+    ok("formato automatico: scansione in JPEG, testo in PNG", s4.render(0, 1, "auto").startswith("data:image/jpeg")
+       and s2.render(0, 1, "auto").startswith("data:image/png"))
+
+
 make_form()
-for name, fn in (("pagine ruotate", t_rotated), ("moduli", t_forms), ("pagine", t_pages), ("segnalibri/link/proprietà", t_bookmarks_links_props),
+for name, fn in (("audit", t_audit), ("pagine ruotate", t_rotated), ("moduli", t_forms), ("pagine", t_pages), ("segnalibri/link/proprietà", t_bookmarks_links_props),
                  ("sicurezza/colore", t_security_color), ("pdfa/esporta", t_pdfa_export), ("firme", t_signatures),
                  ("ripara/lotto", t_repair_batch)):
     check(name, fn)

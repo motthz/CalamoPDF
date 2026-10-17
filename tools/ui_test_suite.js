@@ -85,7 +85,7 @@ const ok = (name, cond, extra = "") => { console.log((cond ? "PASS " : "FAIL ") 
 
   // ---- bookmarks
   await p.click('#sideSwitch [data-side="marks"]'); await W(500);
-  await p.click('[data-cmd="markAuto"]'); await W(1500);
+  await p.click('[data-cmd="markAuto"]'); await p.waitForSelector("#marksList .mark", { timeout: 15000 }).catch(() => {}); await W(500);
   const marks = await ev(async () => (await call("bookmarks")).map(m => m.title));
   ok("segnalibri dai titoli", marks.includes("Capitolo 1") && marks.includes("Capitolo 2"), marks);
   ok("segnalibri nella barra a sinistra", (await p.$$("#marksList .mark")).length === marks.length);

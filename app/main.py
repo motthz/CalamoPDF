@@ -31,7 +31,7 @@ from engine.ocr import available_languages  # noqa: E402
 from engine.storage import load_json, save_json  # noqa: E402
 import updater  # noqa: E402
 
-VERSION = "1.5.0"
+VERSION = "1.5.1"
 
 _user32 = ctypes.windll.user32
 _user32.FindWindowW.restype = wintypes.HWND
@@ -426,6 +426,8 @@ class Api:
 
     @safe
     def extract_pages(self, spec):
+        from engine.editing import parse_pages
+        parse_pages(spec, len(self._s.doc))          # a wrong range is said before asking where to save
         path = self._pick_save(f"{self._base()} - estratto.pdf")
         return self._s.extract_pages(spec, path) if path else None
 
@@ -700,6 +702,8 @@ class Api:
 
     @safe
     def save_protected(self, user_pw, owner_pw, allow_print=True, allow_copy=False, allow_edit=False):
+        if not user_pw and not owner_pw:
+            raise RuntimeError("Scrivi almeno una password.")
         path = self._pick_save(f"{self._base()} - protetto.pdf")
         return self._s.save_protected(path, user_pw, owner_pw, allow_print, allow_copy, allow_edit) if path else None
 
@@ -846,7 +850,7 @@ class Api:
     @safe
     def save_pdfa(self):
         path = self._pick_save(f"{self._base()} - PDF-A.pdf")
-        return self._s.save_pdfa(path) if path else None
+        return self._s.save_pdfa(path, self._progress("Creazione del PDF/A")) if path else None
 
     @safe
     def export_other(self, kind):

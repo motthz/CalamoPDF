@@ -929,14 +929,28 @@ loadDoc = function (info) {
 };
 
 // ---------------------------------------------------------------- keyboard
+// first of all: a field that was hidden (a closed panel, the find bar) keeps no keys, and the
+// Ctrl shortcuts of the whole app work from any field (the fields stop the other keys)
+document.addEventListener("keydown", e => {
+  const a = document.activeElement;
+  if (a && a !== document.body && a.closest && !a.closest(".popover, .editor") && a.getClientRects().length === 0) a.blur();
+  if (!e.ctrlKey || e.altKey) return;
+  const k = e.key.toLowerCase();
+  const global = { o: "open", s: e.shiftKey ? "saveAs" : "save", p: "print", k: "toolsHub", f: "find" }[k];
+  if (!global) return;
+  if (!$("#modal").hidden || !$("#tour").hidden) return;
+  e.preventDefault(); e.stopImmediatePropagation();
+  if (global !== "open" && global !== "toolsHub" && !S.doc) return;
+  if (global === "print") return printDoc();
+  if (global === "toolsHub") return openHub();
+  cmd(global);
+}, true);
 document.addEventListener("keydown", e => {
   const k = e.key.toLowerCase();
   if (e.key === "Escape") {
     for (const id of ["hubModal", "batchModal", "certModal"]) if (!$("#" + id).hidden) { $("#" + id).hidden = true; if (document.activeElement) document.activeElement.blur(); e.stopImmediatePropagation(); return; }
     if (S.tool === "sigbox") { setTool("edit"); return; }
   }
-  if (e.ctrlKey && k === "k") { e.preventDefault(); e.stopImmediatePropagation(); openHub(); return; }
-  if (e.ctrlKey && k === "p") { e.preventDefault(); e.stopImmediatePropagation(); if (S.doc) printDoc(); return; }
   if (e.ctrlKey || e.altKey || !S.doc || e.target.closest("input, textarea, select, [contenteditable]")) return;
   if (!$("#tour").hidden || !$("#modal").hidden) return;
   const more = { c: "fill", l: "link", k: "crop", q: "field" }[k];
@@ -963,3 +977,19 @@ TOUR.splice(0, TOUR.length,
   { icon: "i-export", title: "Salva, esporta, stampa", keys: ["Ctrl", "S"],
     text: "Ctrl+S salva, Ctrl+P stampa. “Esporta” salva in Word, Excel, PowerPoint, immagini, pagina web o PDF/A per l'archivio. Calamo si aggiorna da solo quando esce una nuova versione." },
 );
+
+// ---------------------------------------------------------------- dragging a page far away: the list scrolls by itself
+(() => {
+  let speed = 0, timer = null;
+  const tick = () => { if (!speed) { timer = null; return; } $("#thumbs").scrollTop += speed; $("#thumbs2").scrollTop += speed; timer = requestAnimationFrame(tick); };
+  document.addEventListener("dragover", e => {
+    if (S.dragPage == null && S.dragSide == null) { speed = 0; return; }
+    const box = e.target.closest && e.target.closest("#thumbs, #thumbs2");
+    if (!box) { speed = 0; return; }
+    const r = box.getBoundingClientRect(), edge = 60;
+    speed = e.clientY < r.top + edge ? -Math.ceil((r.top + edge - e.clientY) / 4)
+      : e.clientY > r.bottom - edge ? Math.ceil((e.clientY - (r.bottom - edge)) / 4) : 0;
+    if (speed && !timer) timer = requestAnimationFrame(tick);
+  });
+  ["drop", "dragend"].forEach(t => document.addEventListener(t, () => { speed = 0; }));
+})();

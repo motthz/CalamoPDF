@@ -22,3 +22,15 @@ def save_json(name, data):
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=1)
     os.replace(tmp, path(name))
+
+
+def gc(doc, best=3):
+    """How hard to clean a PDF when saving it. Merging duplicate objects (garbage 3 and 4)
+    costs MuPDF time that grows with the square of the objects: under a second on a short
+    document, minutes on thousands of pages. Big documents get garbage 2 (unused objects
+    removed, a few bytes more)."""
+    try:
+        n = doc.xref_length()
+    except Exception:
+        return 2
+    return best if n < 6000 else 2

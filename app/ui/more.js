@@ -185,9 +185,9 @@ function presentRender() {
   if (!P) return;
   const ratio = Math.min(innerWidth / P.w, innerHeight / P.h) * (window.devicePixelRatio || 1);
   const k = S.pres.i;
-  call("render", k, Math.min(ratio, 6), "png").then(u => { if (S.pres && S.pres.i === k) $("#presentImg").src = u; }).catch(() => {});
+  call("render", k, Math.min(ratio, 6), "auto").then(u => { if (S.pres && S.pres.i === k) $("#presentImg").src = u; }).catch(() => {});
   $("#presentNum").textContent = `${k + 1} / ${S.pages.length}`;
-  if (k + 1 < S.pages.length) call("render", k + 1, Math.min(ratio, 6), "png").catch(() => {});   // ready for the next one
+  if (k + 1 < S.pages.length) call("render", k + 1, Math.min(ratio, 6), "auto").catch(() => {});   // ready for the next one
 }
 function presentGo(d) {
   if (!S.pres) return;
@@ -231,8 +231,8 @@ document.addEventListener("keydown", e => {
     e.preventDefault(); e.stopImmediatePropagation();
     return;
   }
+  if (e.key === "F5" && S.doc && !e.target.closest("textarea, [contenteditable]")) { e.preventDefault(); e.stopImmediatePropagation(); presentStart(); return; }
   if (!S.doc || e.target.closest("input, textarea, select, [contenteditable]")) return;
-  if (e.key === "F5") { e.preventDefault(); e.stopImmediatePropagation(); presentStart(); }
   if (e.ctrlKey && e.key.toLowerCase() === "w") { e.preventDefault(); e.stopImmediatePropagation(); if (S.tabs) closeTab(S.tabs.active); }
   if (e.ctrlKey && e.key === "Tab" && S.tabs && S.tabs.tabs.length > 1) {
     e.preventDefault(); e.stopImmediatePropagation();
@@ -407,7 +407,7 @@ async function ocrAll() {
   S.inkCache = {};
   await afterChange();
   renderInkList();
-  toast(words ? `Documento cercabile: ${words} parole aggiunte (Ctrl+F per cercare).` : "Il documento era già cercabile.", "ok");
+  toast(words ? `Documento cercabile: ${plural(words, "parola aggiunta", "parole aggiunte")} (Ctrl+F per cercare).` : "Il documento era già cercabile.", "ok");
 }
 async function translateDoc() {
   const lang = $("#trLang").value;
@@ -418,7 +418,7 @@ async function translateDoc() {
   await guarded(async () => {
     const r = await call("translate_doc", lang);
     loadDoc(r.info);
-    toast(`Copia tradotta: ${r.translated} testi riscritti. Controllala e salvala.`, "ok");
+    toast(`Copia tradotta: ${plural(r.translated, "testo riscritto", "testi riscritti")}. Controllala e salvala.`, "ok");
   }, "Traduzione…");
 }
 async function fillTranslateLangs() {
@@ -457,7 +457,7 @@ $("#imgPages").onkeydown = e => e.stopPropagation();
 $("#imgGo").onclick = () => guarded(async () => {
   if (!S.doc) return;
   const r = await call("export_images", $("#imgPages").value, $("#imgFmt").value, +$("#imgDpi").value);
-  if (r) toast(`Salvate ${r.files.length} immagini`, "ok", { label: "Apri cartella", run: () => call("reveal", r.folder) });
+  if (r) toast(r.files.length === 1 ? "Salvata 1 immagine" : `Salvate ${r.files.length} immagini`, "ok", { label: "Apri cartella", run: () => call("reveal", r.folder) });
 }, "Esportazione delle immagini…");
 
 Object.assign(COMMANDS, {

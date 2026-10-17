@@ -1,3 +1,28 @@
+## Novità di Calamo PDF Studio 1.5.1
+
+**Audit completo: ogni funzione provata come un utente, con screenshot, e spinta al limite** (documenti da 500 e 3000 pagine, scansioni da 77 MB, moduli con 600 campi, input sbagliati di proposito).
+
+**Molto più veloce sui documenti grandi** (500 pagine):
+- **Cerca dati sensibili**: da oltre 6 minuti (l'app sembrava bloccata) a circa 7 secondi; l'elenco mostra i primi 300 risultati ma vengono oscurati tutti.
+- **Salva**: da 15–60 secondi a meno di un secondo (l'unione degli oggetti doppi, lentissima sui file grandi, ora si fa solo sui documenti piccoli).
+- **Modificare, ruotare o ritagliare una pagina** di un documento con segnalibri: da circa 2 secondi a 0,05 (l'annulla salva solo la pagina cambiata).
+- **Esporta in testo**: da 12 a meno di un secondo. **PDF/A**: circa 4 volte più veloce, con la barra di avanzamento.
+- Le **scansioni** arrivano a schermo in JPEG invece che in PNG: fino a 5 volte meno dati per pagina, scorrimento e zoom più fluidi.
+- La **memoria dell'annulla** ha un limite: 12 operazioni su una scansione da 77 MB occupavano quasi 1 GB, ora al massimo 400 MB (le copie più vecchie vengono scartate).
+
+**Correzioni.**
+- Un rettangolo o una freccia disegnati sopra una tabella venivano presi per linee della tabella: *Modifica tabella* ed *Esporta in Excel* sbagliavano righe e colonne.
+- Il testo scritto nei campi dei moduli compariva come testo modificabile con *Modifica* (modificarlo scriveva testo sotto il campo) e poteva diventare un segnalibro.
+- Passando da un documento grande a uno piccolo comparivano errori "page … not in document".
+- Dopo aver chiuso la ricerca o la finestra Strumenti, Ctrl+O e le altre scorciatoie non funzionavano più; ora le scorciatoie con Ctrl funzionano da qualsiasi campo.
+- F5 non avviava la presentazione se il cursore era in un menu a tendina.
+- La barra dei suggerimenti copriva l'inizio della pagina e la barra di ricerca si sovrapponeva ad essa.
+- Trascinando una miniatura verso il bordo, l'elenco delle pagine ora scorre da solo (prima non si poteva portare una pagina oltre la parte visibile).
+- Pagine da estrarre scritte male e protezione senza password ora vengono segnalate subito, prima di chiedere dove salvare.
+- Messaggi più chiari ("1 pagina" invece di "1 pagine", OCR di Windows non disponibile) e niente più notifiche uguali ripetute.
+
+**Test.** `tools/stress_test.py` misura i tempi di ogni operazione sui documenti grandi; i nuovi casi trovati dall'audit sono nei test automatici.
+
 ## Novità di Calamo PDF Studio 1.5.0
 
 **Tutti gli strumenti dei grandi programmi per PDF, più facili da trovare.**

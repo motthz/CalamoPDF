@@ -947,3 +947,7 @@ textarea.fill-in { resize: none; padding: 2px 3px; }
   .toolbar { gap: 8px; padding: 0 8px; }
   .zoom-val { min-width: 44px; }
 }
+/* audit 1.5: the hint bar never covers the top of the page, the find bar sits under it */
+.pages { padding-top: 66px; }
+.findbar { top: 62px; }
+.stage.has-tabs .findbar { top: 96px; }

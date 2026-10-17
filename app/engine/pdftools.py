@@ -16,6 +16,7 @@ import pymupdf as fitz
 
 from . import fonts as F
 from .editing import parse_pages
+from .storage import gc
 
 FIELD_TYPES = {"text": fitz.PDF_WIDGET_TYPE_TEXT, "checkbox": fitz.PDF_WIDGET_TYPE_CHECKBOX,
                "radio": fitz.PDF_WIDGET_TYPE_RADIOBUTTON, "combo": fitz.PDF_WIDGET_TYPE_COMBOBOX,
@@ -456,7 +457,7 @@ class PdfToolsMixin:
                 plans.append((i, r))
             if not plans:
                 return {**self.info(), "cropped": 0}
-            self._checkpoint()
+            self._checkpoint(plans[0][0] if len(plans) == 1 else None)
             for i, r in plans:
                 page = self.doc[i]
                 cb = page.cropbox
@@ -472,7 +473,7 @@ class PdfToolsMixin:
             pages = [i for i in parse_pages(spec, len(self.doc)) if self.doc[i].cropbox != self.doc[i].mediabox]
             if not pages:
                 return {**self.info(), "cropped": 0}
-            self._checkpoint()
+            self._checkpoint(pages[0] if len(pages) == 1 else None)
             for i in pages:
                 self.doc[i].set_cropbox(self.doc[i].mediabox)
             self._forget_pages(pages)
@@ -493,7 +494,7 @@ class PdfToolsMixin:
                                        "creationDate", "modDate") and v})
         except Exception:
             pass
-        data = new.tobytes(garbage=3, deflate=True)
+        data = new.tobytes(garbage=gc(new, 3), deflate=True)
         self.doc = fitz.open(stream=data, filetype="pdf")
         self.resolver = F.FontResolver(self.doc)
 
@@ -549,7 +550,7 @@ class PdfToolsMixin:
                 sheet.show_pdf_page(place, src, pno)
                 if border:
                     sheet.draw_rect(place, color=(0.6, 0.6, 0.6), width=0.5)
-            return out.tobytes(garbage=3, deflate=True)
+            return out.tobytes(garbage=gc(out, 3), deflate=True)
 
     def booklet_bytes(self, size="A4"):
         """An A5 booklet on A4 sheets (or the half of the chosen size): print on both sides,
@@ -570,7 +571,7 @@ class PdfToolsMixin:
                             r = src[pno].rect
                             box = fitz.Rect(half.x0 + 12, half.y0 + 12, half.x1 - 12, half.y1 - 12)
                             sheet.show_pdf_page(_fit((r.width, r.height), box), src, pno)
-            return out.tobytes(garbage=3, deflate=True)
+            return out.tobytes(garbage=gc(out, 3), deflate=True)
 
     # ================================================================== bookmarks
     def bookmarks(self):
@@ -600,11 +601,15 @@ class PdfToolsMixin:
             lines = []
             for i, page in enumerate(self.doc):
                 d = page.get_text("dict")
+                # what is written in a form field is not a title
+                fields = [fitz.Rect(w.rect) for w in (page.widgets() or [])]
                 for b in d["blocks"]:
                     if b.get("type") != 0:
                         continue
                     blines = b["lines"]
                     for l in blines:
+                        if fields and any(f.contains(fitz.Point((l["bbox"][0] + l["bbox"][2]) / 2, (l["bbox"][1] + l["bbox"][3]) / 2)) for f in fields):
+                            continue
                         spans = [s for s in l["spans"] if s["text"].strip()]
                         if not spans:
                             continue
@@ -755,7 +760,8 @@ class PdfToolsMixin:
         """A copy without the password and without the limits on printing and copying."""
         with self.lock:
             data = self.doc.tobytes(encryption=fitz.PDF_ENCRYPT_NONE)
-            fitz.open(stream=data, filetype="pdf").save(path, garbage=3, deflate=True, encryption=fitz.PDF_ENCRYPT_NONE)
+            copy = fitz.open(stream=data, filetype="pdf")
+            copy.save(path, garbage=gc(copy), deflate=True, encryption=fitz.PDF_ENCRYPT_NONE)
             return {"path": path}
 
     def to_grayscale(self):
@@ -838,13 +844,31 @@ class PdfToolsMixin:
             pdfa = all(it["ok"] for it in items if it["group"] == "pdfa")
             return {"items": items, "pdfa": pdfa, "access": all(it["ok"] for it in items if it["group"] == "access")}
 
-    def _embed_missing_fonts(self, doc):
+    def _embed_missing_fonts(self, doc, progress=None):
         """Rewrite the text set in fonts that are not in the file with installed fonts that
         get embedded, at the same place, size and width. Returns the pages changed."""
-        from .document import REDACT_KW, _append_words
+        from .document import REDACT_KW
         changed = []
         resolver = F.FontResolver(doc)
+        widths = {}                                 # the same words come back on every page
+
+        def length(font, part, size):
+            k = (id(font), part, size)
+            w = widths.get(k)
+            if w is None:
+                w = widths[k] = font.text_length(part, fontsize=size)
+            return w
+
+        def append(tw, x, y, text, font, size):
+            # like _append_words (no space glyphs), with the widths remembered
+            for part in re.split(r"( +)", text):
+                if part and not part.startswith(" "):
+                    tw.append((x, y), part, font=font, fontsize=size)
+                x += length(font, part, size)
+        fonts_kept = []                             # the widths are keyed by font: keep them alive
         for i, page in enumerate(doc):
+            if progress:
+                progress(i, len(doc))
             bad = {F.clean_name(f[3]) for f in page.get_fonts() if f[1] == "n/a" and f[2] != "Type3"}
             if not bad:
                 continue
@@ -891,10 +915,11 @@ class PdfToolsMixin:
                     size = s["size"]
                     color = tuple(((s["color"] >> k) & 255) / 255 for k in (16, 8, 0))
                     o = fitz.Point(s["origin"])
+                    fonts_kept.append(font)
                     tw = fitz.TextWriter(page.rect, color=color)
-                    _append_words(tw, (o.x, o.y), text, font, size)
+                    append(tw, o.x, o.y, text, font, size)
                     want = math.hypot(s["bbox"][2] - s["bbox"][0], s["bbox"][3] - s["bbox"][1]) if angle else s["bbox"][2] - s["bbox"][0]
-                    got = font.text_length(text.rstrip(), fontsize=size)
+                    got = sum(length(font, p_, size) for p_ in re.split(r"( +)", text.rstrip()) if p_)
                     sx = max(0.75, min(1.3, want / got)) if got > 0 and want > 0 and not angle else 1.0
                     m = fitz.Matrix(sx, 0, 0, 1, 0, 0)
                     if angle:
@@ -909,7 +934,7 @@ class PdfToolsMixin:
             changed.append(i)
         return changed
 
-    def save_pdfa(self, path):
+    def save_pdfa(self, path, progress=None):
         """A PDF/A-2b copy for long-term archiving (e.g. for public offices): fonts
         embedded, sRGB colour profile, metadata declared, no password, JavaScript or
         attachments. The open document is not changed."""
@@ -921,7 +946,7 @@ class PdfToolsMixin:
             d.scrub(attached_files=True, clean_pages=False, embedded_files=True, hidden_text=False, javascript=True,
                     metadata=False, redactions=False, remove_links=False, reset_fields=False, reset_responses=False,
                     thumbnails=False, xml_metadata=True)
-            fixed = self._embed_missing_fonts(d)
+            fixed = self._embed_missing_fonts(d, progress)
             if fixed:
                 done.append(f"Caratteri incorporati in {len(fixed)} pagine")
             for p in d:
@@ -978,7 +1003,7 @@ class PdfToolsMixin:
 <?xpacket end="w"?>"""
             d.set_xml_metadata(xmp)
             done.append("Profilo colore sRGB e metadati PDF/A-2b")
-            d.save(path, garbage=3, deflate=True, encryption=fitz.PDF_ENCRYPT_NONE)
+            d.save(path, garbage=gc(d, 3), deflate=True, encryption=fitz.PDF_ENCRYPT_NONE)
             check = self.preflight(fitz.open(path))
             left = [it for it in check["items"] if it["group"] == "pdfa" and not it["ok"]]
             return {"path": path, "done": done, "left": left, "ok": not left}
@@ -991,7 +1016,8 @@ class PdfToolsMixin:
         with self.lock:
             parts = []
             for i, page in enumerate(self.doc):
-                t = page.get_text("text", sort=True).strip()
+                # blocks in reading order: get_text("text", sort=True) is 16 times slower
+                t = "\n".join(b[4].strip() for b in page.get_text("blocks", sort=True) if b[6] == 0 and b[4].strip())
                 ink = self._ink_text(i)
                 if ink and len(t) < 20:
                     t = ink
