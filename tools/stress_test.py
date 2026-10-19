@@ -8,6 +8,8 @@ import sys
 import time
 import tracemalloc
 
+# the Windows console (cp1252) cannot print every character of the results
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WORK = os.path.join(ROOT, "build", "stress")
 os.makedirs(WORK, exist_ok=True)

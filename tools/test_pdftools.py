@@ -7,6 +7,8 @@ import shutil
 import sys
 import traceback
 
+# the Windows console (cp1252) cannot print every character of the results
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WORK = os.path.join(ROOT, "build", "pdftools")
 shutil.rmtree(WORK, ignore_errors=True)
