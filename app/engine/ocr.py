@@ -60,7 +60,11 @@ async def _recognize_async(png_bytes, lang_tag=None):
 
 def windows_ocr(png_bytes, lang_tag=None):
     with _ocr_lock:
-        return asyncio.run(_recognize_async(png_bytes, lang_tag))
+        try:
+            return asyncio.run(_recognize_async(png_bytes, lang_tag))
+        except ImportError:
+            raise RuntimeError("Il riconoscimento del testo usa l'OCR di Windows 10/11, che non è disponibile "
+                               "su questo computer.")
 
 
 def available_languages():

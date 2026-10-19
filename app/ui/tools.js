@@ -37,7 +37,7 @@ segSwitch($("#annKind"), "k", k => { S.ann = k; S.annColor = null; drawSwatches(
 segSwitch($("#insKind"), "k", k => {
   S.ins = k;
   $("#sigPick").hidden = $("#sigNew").hidden = k !== "signature";
-  $("#insHint").textContent = k === "signature" ? "Clicca sulla pagina dove mettere la firma." : "Clicca sulla pagina dove mettere l'immagine: poi scegli il file.";
+  if (typeof updateHint === "function") updateHint();
 });
 function drawSwatches() {
   const cur = annColor();
@@ -364,11 +364,11 @@ Object.assign(COMMANDS, {
     S.inkCache = {};
     await afterChange(r);
     goToPage(r.at);
-    toast(`Aggiunte ${r.added} pagine da ${r.files} file`, "ok");
+    toast(`Aggiunte ${plural(r.added, "pagina", "pagine")} da ${plural(r.files, "file", "file")}`, "ok");
   }, "Unione dei PDF…"),
   extractPages: () => guarded(async () => {
     const r = await call("extract_pages", pageSpec());
-    if (r) toast(`Salvate ${r.pages} pagine in un nuovo PDF`, "ok", reveal(r));
+    if (r) toast(`${r.pages === 1 ? "Salvata 1 pagina" : `Salvate ${r.pages} pagine`} in un nuovo PDF`, "ok", reveal(r));
   }),
   deletePages: async () => {
     const spec = pageSpec();
@@ -384,13 +384,14 @@ Object.assign(COMMANDS, {
       watermark: $("#stWatermark").value, wm_opacity: (+$("#stOpacity").value || 18) / 100, wm_color: $("#stWmColor").value,
     });
     await afterChange(r);
-    toast(`Applicato a ${r.stamped} pagine (Ctrl+Z per annullare)`, "ok");
+    toast(`Applicato a ${plural(r.stamped, "pagina", "pagine")} (Ctrl+Z per annullare)`, "ok");
   }, "Applicazione alle pagine…"),
   findSensitive: () => guarded(async () => {
     const kinds = $$("#sensKinds input:checked").map(x => x.value);
     const hits = await call("find_sensitive", kinds, $("#sensTerm").value);
     S.sens = hits.map(h => ({ ...h, on: true }));
     renderSensitive();
+    if (hits.length) toast(`Trovati ${plural(hits.length, "dato", "dati")} da oscurare: controllali e premi Oscura i selezionati.`, "ok");
     S.pages.forEach(drawOverlay);
     if (hits.length) goToPage(hits[0].page, hits[0].bbox[1]);
     else toast("Nessun dato sensibile trovato.", "ok");
@@ -398,14 +399,14 @@ Object.assign(COMMANDS, {
   redactSelected: async () => {
     const areas = S.sens.filter(h => h.on).map(h => ({ page: h.page, bbox: h.bbox }));
     if (!areas.length) return;
-    const ok = await modal("Oscurare per sempre?", `${areas.length} elementi verranno coperti di nero e il testo sotto eliminato dal PDF. Puoi annullare con Ctrl+Z finché non salvi.`,
+    const ok = await modal("Oscurare per sempre?", `${areas.length === 1 ? "1 elemento verrà coperto" : `${areas.length} elementi verranno coperti`} di nero e il testo sotto eliminato dal PDF. Puoi annullare con Ctrl+Z finché non salvi.`,
       [["Annulla", false, "ghost"], ["Oscura", true, "primary"]]);
     if (!ok) return;
     await guarded(async () => {
       const r = await call("redact", areas, $("#sensMeta").checked);
       S.sens = []; renderSensitive(); S.inkCache = {};
       await afterChange(r);
-      toast(`Oscurati ${r.redacted} elementi`, "ok");
+      toast(r.redacted === 1 ? "Oscurato 1 elemento" : `Oscurati ${r.redacted} elementi`, "ok");
     }, "Oscuramento…");
   },
   compare: () => guarded(async () => {
@@ -427,8 +428,10 @@ Object.assign(COMMANDS, {
 
 function renderSensitive() {
   const L = $("#sensList");
-  L.innerHTML = S.sens.map((h, k) => `<label class="sens-item"><input type="checkbox" data-k="${k}"${h.on ? " checked" : ""}>
-    <span><b>${esc(h.text)}</b><small>${esc(h.label)} · pagina ${h.page + 1}</small></span></label>`).join("");
+  const MAX = 300;
+  L.innerHTML = S.sens.slice(0, MAX).map((h, k) => `<label class="sens-item"><input type="checkbox" data-k="${k}"${h.on ? " checked" : ""}>
+    <span><b>${esc(h.text)}</b><small>${esc(h.label)} · pagina ${h.page + 1}</small></span></label>`).join("")
+    + (S.sens.length > MAX ? `<p class="muted small">…e altri ${S.sens.length - MAX} (${S.sens.slice(MAX).filter(h => h.on).length} selezionati). Sono tutti segnati sulle pagine.</p>` : "");
   $$("input", L).forEach(c => c.onchange = () => { S.sens[+c.dataset.k].on = c.checked; S.pages.forEach(drawOverlay); $("#redactBtn").disabled = !S.sens.some(h => h.on); });
   $$(".sens-item span", L).forEach((sp, k) => sp.onclick = e => { e.preventDefault(); goToPage(S.sens[k].page, S.sens[k].bbox[1]); });
   $("#redactBtn").disabled = !S.sens.some(h => h.on);

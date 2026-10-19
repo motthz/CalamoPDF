@@ -157,7 +157,14 @@ class ExtrasMixin:
     def _find_tables(self, index):
         page = self.doc[index]
         try:
-            found = page.find_tables()
+            # on the page alone, without its comments: a rectangle or an arrow drawn over a
+            # table would be taken for some of its lines
+            if page.first_annot is not None:
+                one = fitz.open()
+                one.insert_pdf(self.doc, from_page=index, to_page=index, annots=False, links=False)
+                found = one[0].find_tables()
+            else:
+                found = page.find_tables()
         except Exception:
             return []
         out = []

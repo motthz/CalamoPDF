@@ -6,6 +6,7 @@ import re
 import pymupdf as fitz
 
 from .editing import parse_pages
+from .storage import gc
 
 
 def _open(src, password=None):
@@ -62,7 +63,7 @@ def merge(items, out_path, bookmarks=True):
             out.set_toc(toc)
         except Exception:
             out.set_toc([t for t in toc if t[0] == 1])
-    out.save(out_path, garbage=3, deflate=True)
+    out.save(out_path, garbage=gc(out, 3), deflate=True)
     return {"path": out_path, "name": os.path.basename(out_path), "pages": len(out), "files": len(items)}
 
 
@@ -114,7 +115,7 @@ def split(src, base, folder, mode, value=None):
         for i in range(n):
             one = fitz.open()
             one.insert_pdf(doc, from_page=i, to_page=i)
-            w = len(one.tobytes(garbage=3, deflate=True))
+            w = len(one.tobytes(garbage=gc(one, 3), deflate=True))
             if cur and total + w > limit:
                 groups.append(cur)
                 cur, total = [], 0
@@ -139,6 +140,44 @@ def split(src, base, folder, mode, value=None):
         while os.path.exists(path):
             path = os.path.join(folder, f"{_safe(base)} - {label} ({j}).pdf")
             j += 1
-        out.save(path, garbage=3, deflate=True)
+        out.save(path, garbage=gc(out, 3), deflate=True)
         paths.append(path)
     return {"files": paths, "folder": folder, "pages": n}
+
+
+def repair(src, out_path):
+    """A damaged PDF read as far as possible and written again clean. Pages that cannot be
+    read are left out and listed."""
+    import pymupdf as fz
+    with open(src, "rb") as f:
+        data = f.read()
+    if not data.lstrip()[:5].startswith(b"%PDF") and b"%PDF" not in data[:1024]:
+        raise RuntimeError("Il file non sembra un PDF.")
+    fz.TOOLS.mupdf_warnings()                     # forget earlier warnings
+    try:
+        doc = fz.open(stream=data, filetype="pdf")
+    except Exception:
+        raise RuntimeError("Il file è troppo danneggiato: non riesco a leggerlo.")
+    if doc.needs_pass:
+        raise RuntimeError("Il PDF è protetto da password: aprilo con la password e salvane una copia.")
+    out = fz.open()
+    bad = []
+    for i in range(doc.page_count):
+        try:
+            doc[i].get_pixmap(matrix=fz.Matrix(0.2, 0.2))
+            out.insert_pdf(doc, from_page=i, to_page=i, annots=True, links=True)
+        except Exception:
+            bad.append(i + 1)
+    if not len(out):
+        raise RuntimeError("Nessuna pagina leggibile in questo file.")
+    try:
+        toc = [t for t in doc.get_toc(simple=False) if 1 <= t[2] <= len(out)]
+        if toc and not bad:
+            out.set_toc(toc)
+        out.set_metadata({k: v for k, v in doc.metadata.items() if k in ("title", "author", "subject", "keywords") and v})
+    except Exception:
+        pass
+    warnings = fz.TOOLS.mupdf_warnings()
+    out.save(out_path, garbage=gc(out, 4), deflate=True, clean=True)
+    return {"path": out_path, "name": os.path.basename(out_path), "pages": len(out), "bad": bad,
+            "repaired": bool(doc.is_repaired or warnings or bad)}

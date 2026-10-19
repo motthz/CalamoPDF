@@ -52,6 +52,7 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;",
 
 // ---------------------------------------------------------------- feedback
 function toast(msg, kind = "", action) {
+  if ([...$$("#toasts .toast:not(.out) span")].some(s => s.textContent === msg)) return;
   const el = document.createElement("div");
   el.className = "toast " + kind;
   el.innerHTML = `<i></i><span>${esc(msg)}</span>`;
@@ -277,20 +278,24 @@ function layoutPages() {
   S.pages.filter(P => P.visible).forEach(P => loadPage(P));
   $("#zoomVal").textContent = Math.round(S.zoom * 100) + "%";
 }
+// a page of a document no longer shown (the tab changed while it was loading) is left alone
+const stale = P => S.pages[P.i] !== P;
 async function loadPage(P, force) {
+  if (stale(P)) return;
   const k = `${P.v}@${S.zoom}`;
   if (P.renderKey !== k || force) {
     P.renderKey = k;
     const ratio = Math.min(Math.max(window.devicePixelRatio || 1, 1) * scale(), 6);
     try {
-      const url = await call("render", P.i, ratio, "png");
+      const url = await call("render", P.i, ratio, "auto");
       if (P.renderKey === k) {
         P.img.src = url;
         P.canvas = null;
         P.img.onload = () => { const sh = $(".shimmer", P.el); sh && sh.remove(); };
       }
-    } catch (e) { toast(e.message, "err"); }
+    } catch (e) { if (!stale(P)) toast(e.message, "err"); }
   }
+  if (stale(P)) return;
   if (P.dataV !== P.v) {
     P.dataV = P.v;
     try {
@@ -299,10 +304,11 @@ async function loadPage(P, force) {
       S.inkCache[P.i] = d.ink;
       drawOverlay(P);
       if (P.i === S.current) renderInkList();
-    } catch (e) { toast(e.message, "err"); }
+    } catch (e) { if (!stale(P)) toast(e.message, "err"); }
   } else drawOverlay(P);
 }
 async function loadThumb(P) {
+  if (stale(P)) return;
   const k = String(P.v);
   if (P.thumbKey === k) return;
   P.thumbKey = k;
@@ -1412,13 +1418,13 @@ const COMMANDS = {
   find: () => { $("#findbar").hidden = false; $("#findInput").focus(); $("#findInput").select(); },
   findNext: () => { if (S.hits.length) { S.hitIdx = (S.hitIdx + 1) % S.hits.length; goToHit(); } },
   findPrev: () => { if (S.hits.length) { S.hitIdx = (S.hitIdx - 1 + S.hits.length) % S.hits.length; goToHit(); } },
-  findClose: () => { $("#findbar").hidden = true; S.hits = []; S.pages.forEach(drawOverlay); },
+  findClose: () => { $("#findbar").hidden = true; document.activeElement && document.activeElement.blur(); S.hits = []; S.pages.forEach(drawOverlay); },
   replaceAll: () => guarded(async () => {
     const term = $("#findInput").value, repl = $("#replaceInput").value;
     if (!term) return;
     const r = await call("replace_all", term, repl);
     await afterChange(r.info);
-    toast(r.count ? `Sostituite ${r.count} occorrenze` : "Nessuna occorrenza nel testo digitale", r.count ? "ok" : "");
+    toast(r.count ? (r.count === 1 ? "Sostituita 1 occorrenza" : `Sostituite ${r.count} occorrenze`) : "Nessuna occorrenza nel testo digitale", r.count ? "ok" : "");
     runSearch();
   }, "Sostituzione in corso…"),
   analyze: () => analyze(false), analyzeAll: () => analyze(true),

@@ -16,6 +16,7 @@ import pymupdf as fitz
 from PIL import Image
 
 from .storage import path as data_path
+from .storage import gc
 
 MARK_TYPES = {"highlight": fitz.PDF_ANNOT_HIGHLIGHT, "underline": fitz.PDF_ANNOT_UNDERLINE,
               "strike": fitz.PDF_ANNOT_STRIKE_OUT}
@@ -168,7 +169,7 @@ class EditingMixin:
             out = fitz.open()
             for p in pages:
                 out.insert_pdf(self.doc, from_page=p, to_page=p, annots=True)
-            out.save(path, garbage=3, deflate=True)
+            out.save(path, garbage=gc(out, 3), deflate=True)
             return {"pages": len(pages), "path": path}
 
     def split_every(self, every, folder, base):
@@ -181,7 +182,7 @@ class EditingMixin:
                 out = fitz.open()
                 out.insert_pdf(self.doc, from_page=a, to_page=min(a + every, n) - 1, annots=True)
                 p = os.path.join(folder, f"{base}_parte{k + 1}.pdf")
-                out.save(p, garbage=3, deflate=True)
+                out.save(p, garbage=gc(out, 3), deflate=True)
                 paths.append(p)
             return {"files": paths}
 
@@ -716,40 +717,47 @@ class EditingMixin:
             pats = [(k, re.compile(SENSITIVE[k][1], re.I if k == "email" else 0)) for k in kinds if k in SENSITIVE]
             if term and term.strip():
                 pats.append(("term", re.compile(re.escape(term.strip()), re.I)))
-            hits = []
+            out = []
             for i, page in enumerate(self.doc):
-                # lines of text with the box of every character run, to map matches to boxes
+                # lines of text with the box of every character, to map matches to boxes; the
+                # boxes are made only for what matches (a long document has millions of characters)
                 rows = []
                 for b in page.get_text("rawdict")["blocks"]:
                     for line in b.get("lines", []):
                         chars = [c for s in line["spans"] for c in s["chars"]]
                         if chars:
-                            rows.append(("".join(c["c"] for c in chars),
-                                         [self._shown(page, fitz.Rect(c["bbox"])) for c in chars]))
+                            rows.append(("".join(c["c"] for c in chars), [c["bbox"] for c in chars]))
                 for l in self.ink.get(i, []):
                     if l.get("text"):
                         t = l["text"]
                         x0, y0, x1, y1 = l["bbox"]
                         step = (x1 - x0) / max(len(t), 1)
-                        rows.append((t, [fitz.Rect(x0 + k * step, y0, x0 + (k + 1) * step, y1) for k in range(len(t))]))
-                for text, boxes in rows:
+                        rows.append((t, [(x0 + k * step, y0, x0 + (k + 1) * step, y1) for k in range(len(t))], True))
+                hits = []
+                for row in rows:
+                    text, boxes, shown = row[0], row[1], len(row) > 2
                     for kind, rx in pats:
                         for m in rx.finditer(text):
                             if kind == "card" and not _luhn(m.group()):
                                 continue
-                            r = fitz.Rect()
-                            for b in boxes[m.start():m.end()]:
-                                r |= b
-                            if not r.is_empty:
-                                hits.append({"page": i, "bbox": list(r), "text": m.group(), "kind": kind,
-                                             "label": SENSITIVE[kind][0] if kind in SENSITIVE else "Testo"})
-            # a match inside a longer one (a "phone number" inside an IBAN) is the same data
-            out = []
-            for h in sorted(hits, key=lambda h: -len(h["text"])):
-                b = fitz.Rect(h["bbox"])
-                if not any(o["page"] == h["page"] and abs(b & fitz.Rect(o["bbox"])) > abs(b) * 0.6 for o in out):
-                    out.append(h)
-            return sorted(out, key=lambda h: (h["page"], h["bbox"][1], h["bbox"][0]))
+                            bs = boxes[m.start():m.end()]        # plain numbers: fitz.Rect is slow by the thousand
+                            r = (min(b[0] for b in bs), min(b[1] for b in bs), max(b[2] for b in bs), max(b[3] for b in bs))
+                            if r[2] <= r[0] or r[3] <= r[1]:
+                                continue
+                            if not shown:
+                                r = tuple(self._shown(page, fitz.Rect(r)))
+                            hits.append({"page": i, "bbox": list(r), "text": m.group(), "kind": kind,
+                                         "label": SENSITIVE[kind][0] if kind in SENSITIVE else "Testo"})
+                # a match inside a longer one (a "phone number" inside an IBAN) is the same data
+                kept = []
+                for h in sorted(hits, key=lambda h: -len(h["text"])):
+                    b = h["bbox"]
+                    area = (b[2] - b[0]) * (b[3] - b[1])
+                    if not any(max(0, min(b[2], o[2]) - max(b[0], o[0])) * max(0, min(b[3], o[3]) - max(b[1], o[1])) > area * 0.6
+                               for o in (k["bbox"] for k in kept)):
+                        kept.append(h)
+                out.extend(sorted(kept, key=lambda h: (h["bbox"][1], h["bbox"][0])))
+            return out
 
     def redact(self, areas, metadata=False):
         """Black out areas for good: the text under them is removed (not just covered),
@@ -812,6 +820,8 @@ class EditingMixin:
             today = datetime.date.today().strftime("%d/%m/%Y")
             fname = os.path.splitext(os.path.basename(self.path or "Documento.pdf"))[0]
             wm = (spec.get("watermark") or "").strip()
+            bates0 = int(spec.get("bates_start") or 1)          # Bates numbering: PREFIX000001...
+            digits = max(1, min(int(spec.get("bates_digits") or 6), 12))
             if not (spec.get("header") or "").strip() and not (spec.get("footer") or "").strip() and not wm:
                 raise RuntimeError("Scrivi un'intestazione, un piè di pagina o una filigrana.")
             self._checkpoint()
@@ -820,8 +830,9 @@ class EditingMixin:
                 R = page.rect
 
                 def fill(t):
+                    bates = f"{spec.get('bates_prefix') or ''}{str(bates0 + k).zfill(digits)}"
                     return (t.replace("{n}", str(start + k)).replace("{N}", str(start + len(pages) - 1))
-                            .replace("{data}", today).replace("{file}", fname))
+                            .replace("{data}", today).replace("{file}", fname).replace("{bates}", bates))
                 for key, y in (("header", R.y0 + margin), ("footer", R.y1 - margin + size * 0.8)):
                     t = fill((spec.get(key) or "").strip())
                     if not t:
@@ -942,7 +953,7 @@ class EditingMixin:
                                  lossless=True, bitonal=False, color=True, gray=True)
             except Exception:
                 pass
-            d.save(path, garbage=4, deflate=True, deflate_images=True, deflate_fonts=True, clean=True,
+            d.save(path, garbage=gc(d, 4), deflate=True, deflate_images=True, deflate_fonts=True, clean=True,
                    use_objstms=1)
             after = os.path.getsize(path)
             return {"before": before, "after": after, "path": path}
@@ -962,7 +973,7 @@ class EditingMixin:
             if allow_edit:
                 perm |= fitz.PDF_PERM_MODIFY | fitz.PDF_PERM_ANNOTATE | fitz.PDF_PERM_FORM | fitz.PDF_PERM_ASSEMBLE
             copy = fitz.open(stream=self.doc.tobytes(), filetype="pdf")       # the open document stays as it is
-            copy.save(path, garbage=3, deflate=True, encryption=fitz.PDF_ENCRYPT_AES_256,
+            copy.save(path, garbage=gc(copy, 3), deflate=True, encryption=fitz.PDF_ENCRYPT_AES_256,
                           owner_pw=owner, user_pw=user_pw or "", permissions=perm)
             return {"path": path}
 

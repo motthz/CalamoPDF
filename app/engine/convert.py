@@ -13,6 +13,7 @@ import urllib.parse
 import urllib.request
 
 import pymupdf as fitz
+from .storage import gc
 
 IMAGE_EXT = {"jpg", "jpeg", "png", "bmp", "gif", "tif", "tiff", "webp"}
 OFFICE_EXT = {"doc", "docx", "rtf", "odt", "xls", "xlsx", "ods", "csv", "ppt", "pptx", "odp"}
@@ -50,7 +51,7 @@ def images_to_pdf(paths, out_path=None, fit="a4"):
                 box = page.rect
             page.insert_image(box, stream=buf.getvalue(), keep_proportion=True)
     if out_path:
-        out.save(out_path, garbage=3, deflate=True)
+        out.save(out_path, garbage=gc(out, 3), deflate=True)
     return out
 
 
@@ -79,7 +80,7 @@ def html_to_pdf(text, out_path=None, base=None):
     writer.close()
     doc = fitz.open(stream=buf.getvalue(), filetype="pdf")
     if out_path:
-        doc.save(out_path, garbage=3, deflate=True)
+        doc.save(out_path, garbage=gc(doc, 3), deflate=True)
     return doc
 
 
@@ -279,7 +280,8 @@ def to_pdf(path, out_path):
         return "image"
     if ext in MUPDF_EXT:
         d = fitz.open(path)
-        fitz.open("pdf", d.convert_to_pdf()).save(out_path, garbage=3, deflate=True)
+        conv = fitz.open("pdf", d.convert_to_pdf())
+        conv.save(out_path, garbage=gc(conv), deflate=True)
         return "mupdf"
     if ext in ("html", "htm", "xhtml"):
         with open(path, "rb") as f:
@@ -321,7 +323,7 @@ def files_to_pdf(paths, out_path):
         one = os.path.join(tmp, f"{k}.pdf")
         how.append(to_pdf(p, one))
         out.insert_pdf(fitz.open(one))
-    out.save(out_path, garbage=3, deflate=True)
+    out.save(out_path, garbage=gc(out, 3), deflate=True)
     return {"path": out_path, "how": how}
 
 

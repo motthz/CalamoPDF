@@ -19,7 +19,9 @@ from .lexicon import LEXICON, WORD_RE
 from .editing import EditingMixin
 from .extras import ExtrasMixin
 from .graphics import GraphicsMixin, tag_image
+from .pdftools import PdfToolsMixin
 from .ocr import PRINT_BELOW, Learning, prepare_page, read_page, read_region
+from .storage import gc
 
 # search expands typographic ligatures ("ﬃ" is found by "ffi")
 SEARCH_FLAGS = fitz.TEXT_DEHYPHENATE | fitz.TEXT_PRESERVE_WHITESPACE | fitz.TEXT_MEDIABOX_CLIP
@@ -191,8 +193,9 @@ def _find_in_line(line, term):
     return out
 
 
-class Session(EditingMixin, ExtrasMixin, GraphicsMixin):
+class Session(EditingMixin, ExtrasMixin, GraphicsMixin, PdfToolsMixin):
     MAX_UNDO = 40
+    MAX_UNDO_BYTES = 400 * 1024 * 1024
 
     def __init__(self):
         self.lock = threading.RLock()
@@ -218,8 +221,10 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin):
             if doc.needs_pass:
                 if not password:
                     raise RuntimeError("PASSWORD_REQUIRED")
-                if not doc.authenticate(password):
+                self._auth = doc.authenticate(password)
+                if not self._auth:
                     raise RuntimeError("PASSWORD_WRONG")
+                self._perm = doc.permissions
             self.doc, self.path = doc, path
             self._password = password
             self.dirty = False
@@ -261,15 +266,27 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin):
                  for i, p in enumerate(self.doc)]
         return {"path": self.path, "name": os.path.basename(self.path) if self.path else (self.title or "Senza titolo.pdf"),
                 "pages": pages, "dirty": self.dirty, "canUndo": bool(self.undo_stack),
-                "canRedo": bool(self.redo_stack), "analyzed": sorted(self.ink.keys())}
+                "canRedo": bool(self.redo_stack), "analyzed": sorted(self.ink.keys()),
+                "protected": bool(getattr(self, "_password", None)), "forms": bool(self.doc.is_form_pdf)}
 
     def save(self, path=None):
         with self.lock:
             target = path or self.path
             if not target:
                 raise RuntimeError("Nessun percorso di salvataggio.")
+            if not self.dirty and self.path and os.path.exists(self.path) and \
+                    os.path.normcase(os.path.abspath(target)) == os.path.normcase(os.path.abspath(self.path)):
+                return self.info()                  # nothing changed: the file (and its signatures) stays as it is
             tmp = target + ".calamo-tmp"
-            self.doc.save(tmp, garbage=3, deflate=True, clean=False)
+            # a document opened with its password stays protected by it, with the same limits
+            # (the document in memory is no longer encrypted after an undo: protect it again)
+            crypt = {}
+            if getattr(self, "_password", None):
+                import secrets
+                owner = self._password if getattr(self, "_auth", 0) & 4 else secrets.token_hex(16)
+                crypt = dict(encryption=fitz.PDF_ENCRYPT_AES_256, user_pw=self._password, owner_pw=owner,
+                             permissions=getattr(self, "_perm", -1))
+            self.doc.save(tmp, garbage=gc(self.doc, 3), deflate=True, clean=False, **crypt)
             os.replace(tmp, target)
             # saving compacts the document in memory and renumbers its objects; PyMuPDF's
             # record of the fonts already written then points at the wrong objects, and text
@@ -302,8 +319,8 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin):
     def _page_only_ok(self, page):
         try:
             p = self.doc[page]
-            return (len(self.doc) > 1 and not self.doc.is_form_pdf and p.first_link is None
-                    and not self.doc.get_toc())
+            # bookmarks are fine: they are put back after the page (see _restore)
+            return len(self.doc) > 1 and not self.doc.is_form_pdf and p.first_link is None
         except Exception:
             return False
 
@@ -312,6 +329,14 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin):
         if len(self.undo_stack) > self.MAX_UNDO:
             self.undo_stack.pop(0)
         self.redo_stack.clear()
+        # a copy of a big scan for every step would fill the memory: the oldest steps go
+        # once the copies weigh too much (the last one always stays)
+        while len(self.undo_stack) > 1 and sum(self._snap_size(x) for x in self.undo_stack) > self.MAX_UNDO_BYTES:
+            self.undo_stack.pop(0)
+
+    @staticmethod
+    def _snap_size(snap):
+        return len(snap[1]) if snap[0] == "doc" else len(snap[2])
 
     def _touch(self, *pages):
         self.dirty = True
@@ -328,8 +353,11 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin):
             self.ignored[i] = ignored
             dst.append(self._snapshot(i))
             one = fitz.open(stream=data, filetype="pdf")
+            toc = self.doc.get_toc(simple=False)     # deleting the page would drop its bookmarks
             self.doc.delete_page(i)
             self.doc.insert_pdf(one, start_at=i, links=False, annots=True)
+            if toc:
+                self.doc.set_toc(toc)
             for store, value in ((self.ink, ink), (self.hands, hands)):
                 if value is None:
                     store.pop(i, None)
@@ -366,6 +394,10 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin):
     def render(self, index, scale, fmt="png"):
         with self.lock:
             page = self.doc[index]
+            if fmt == "auto":
+                # a scan or a photo travels as JPEG (a fifth of the PNG); text and drawings
+                # stay PNG, sharp at every zoom
+                fmt = "jpeg" if self._is_scan(page) else "png"
             pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False, annots=True)
             data = pix.tobytes("jpeg", jpg_quality=88) if fmt == "jpeg" else pix.tobytes("png")
             mime = "image/jpeg" if fmt == "jpeg" else "image/png"
@@ -549,10 +581,19 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin):
         with self.lock:
             page = self.doc[index]
             d = page.get_text("dict", flags=self.TEXT_FLAGS)
+            # the text of form fields and text boxes is extracted with the page, but it is not
+            # page text: it is filled in with Compila or moved as an object
+            over = [_shown(page, w.rect) for w in (page.widgets() or [])]
+            over += [_shown(page, a.rect) for a in page.annots() if a.type[1] in ("FreeText", "Stamp")]
             out = []
             for bi, b in enumerate(d["blocks"]):
                 if b.get("type") != 0:
                     continue
+                if over:
+                    c = _shown(page, b["bbox"])
+                    c = fitz.Point((c.x0 + c.x1) / 2, (c.y0 + c.y1) / 2)
+                    if any(r.contains(c) for r in over):
+                        continue
                 lines = self._line_list(b, page)
                 if not lines or not "".join(x["text"] for x in lines).strip():
                     continue
@@ -573,7 +614,8 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin):
                 })
             styles = self.hands[index].listing(self.ink.get(index, [])) if index in self.hands else []
             return {"blocks": out, "ink": self._ink_public(index), "styles": styles,
-                    "objects": self.objects(index), "version": self.page_versions.get(index, 0)}
+                    "objects": self.objects(index), "links": self.links(index),
+                    "version": self.page_versions.get(index, 0)}
 
     def _raw_block(self, page, ref):
         """ref: block bbox (preferred - indices shift after edits) or index."""
@@ -1540,7 +1582,7 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin):
     # ------------------------------------------------------------------ pages
     def rotate_page(self, index, delta=90):
         with self.lock:
-            self._checkpoint()
+            self._checkpoint(index)                 # one page changes: undo keeps only that page
             p = self.doc[index]
             p.set_rotation((p.rotation + delta) % 360)
             self.ink.pop(index, None)

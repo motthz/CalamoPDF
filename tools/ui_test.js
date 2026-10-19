@@ -80,7 +80,9 @@ const ok = (name, cond, extra = "") => { console.log((cond ? "PASS " : "FAIL ") 
         sp(u);
       };
     });
-    await p.click("#btnSpeak");
+    // at this window width the button is in "Strumenti", not in the bar
+    if (await p.isVisible("#btnSpeak")) await p.click("#btnSpeak");
+    else { await p.click("#btnHub"); await p.fill("#hubSearch", "alta voce"); await p.keyboard.press("Enter"); }
     let said = [];
     for (let i = 0; i < 60 && !(said.length && said[0].end); i++) { await W(500); said = await p.evaluate(() => window.__said); }
     const first = said[0] || {};

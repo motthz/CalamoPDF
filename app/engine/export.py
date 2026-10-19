@@ -19,6 +19,12 @@ HAND_FONT = "Segoe Print"
 
 def _tables(page):
     try:
+        if page.first_annot is not None:
+            # without the comments: a rectangle drawn over a table is not one of its lines
+            one = fitz.open()
+            one.insert_pdf(page.parent, from_page=page.number, to_page=page.number, annots=False, links=False)
+            _tables.keep = one                  # the tables read their text from this page
+            page = one[0]
         return [t for t in page.find_tables().tables if t.row_count >= 2 and t.col_count >= 2]
     except Exception:
         return []

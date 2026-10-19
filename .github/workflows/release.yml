@@ -39,7 +39,9 @@ jobs:
       - name: Tests on Windows
         env:
           CALAMO_GITHUB_TOKEN: ${{ github.token }}
-        run: python tools/test_windows.py
+        run: |
+          python tools/test_windows.py
+          python tools/test_pdftools.py
 
       - name: Build CalamoPDF.exe
         run: |
