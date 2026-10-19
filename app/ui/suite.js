@@ -238,10 +238,14 @@ function showSide(view) {
   if (view === "marks") loadMarks();
 }
 $$("#sideSwitch [data-side]").forEach(b => b.onclick = () => showSide(b.dataset.side));
-let MARKS = [];
+let MARKS = [], marksGen = 0;
 async function loadMarks() {
   if (!S.doc) return;
-  try { MARKS = await call("bookmarks"); } catch (e) { MARKS = []; }
+  const gen = ++marksGen;
+  let list;
+  try { list = await call("bookmarks"); } catch (e) { list = []; }
+  if (gen !== marksGen) return;          // a save (or a newer reading) came after: this list is old
+  MARKS = list;
   renderMarks();
 }
 function renderMarks() {
@@ -276,7 +280,8 @@ function renderMarks() {
   });
 }
 async function saveMarks(list) {
-  await guarded(async () => { const r = await call("set_bookmarks", list); MARKS = r.bookmarks; updateInfo(r); renderMarks(); });
+  marksGen++;
+  await guarded(async () => { const r = await call("set_bookmarks", list); marksGen++; MARKS = r.bookmarks; updateInfo(r); renderMarks(); });
 }
 
 // ---------------------------------------------------------------- forms
@@ -799,7 +804,7 @@ Object.assign(COMMANDS, {
         [["Annulla", false, "ghost"], ["Sostituisci", true, "primary"]]);
       if (!ok) return;
     }
-    showSide("marks");
+    if (S.sideView !== "marks") showSide("marks");
     await saveMarks(list);
     toast(`Creati ${plural(list.length, "segnalibro", "segnalibri")} dai titoli`, "ok");
   }, "Cerco i titoli…"),
