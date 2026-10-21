@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -300,6 +301,46 @@ def test_reader_speed():
     # keeps it (see HandReader._fast_wins): never slower, faster where the fast one wins
     check("reader speed: not slower than 1.6", new <= old * 1.05, f"{old:.3f} -> {new:.3f} s per riga")
     check("reader speed: as accurate", e_new <= e_old + 0.05, f"errore {e_old:.2f} -> {e_new:.2f}")
+
+
+def test_reader_gpu_path():
+    """The image part read on another device (the graphics card, simulated here with a second
+    session on the processor): the same readings; a device that fails mid-way leaves the
+    processor reading, with no line lost."""
+    import types
+    import numpy as np
+    import onnxruntime as ort
+    from engine.handreader import HandReader, READER, model_dir
+    if not READER.installed():
+        print("SKIP reader gpu path: no model")
+        return
+    print(f"   scheda grafica utilizzabile: {READER.gpu_found()}  fornitori: {ort.get_available_providers()}")
+    imgs = [np.asarray(_line_image(t, "Inkfree.ttf", 52, (25, 40, 140)))
+            for t in ("Visto e approvato", "Marco Bianchi", "Pagato in contanti", "Riunione del 12 maggio")]
+    r = HandReader()
+    r.use_fast = r.use_gpu = False
+    want = [r.read(im) for im in imgs]
+    g = HandReader()
+    g.use_fast = g.use_gpu = False
+    g._load()
+    g._gpu = types.SimpleNamespace(lock=threading.Lock(), enc=ort.InferenceSession(
+        os.path.join(model_dir(), "encoder.onnx"), providers=["CPUExecutionProvider"]))
+    g.read_ahead(imgs)
+    got = [g.read(im) for im in imgs]
+    check("reader gpu path: same readings", [x[0] for x in got] == [x[0] for x in want],
+          f"{[x[0] for x in want]} -> {[x[0] for x in got]}")
+    check("reader gpu path: device reported", g.device() == "gpu" and g.status()["device"] == "gpu")
+
+    class Broken:
+        def run(self, *a, **k):
+            raise RuntimeError("device removed")
+    b = HandReader()
+    b.use_fast = b.use_gpu = False
+    b._load()
+    b._gpu = types.SimpleNamespace(lock=threading.Lock(), enc=Broken())
+    got = [b.read(im) for im in imgs]
+    check("reader gpu path: a failing device falls back to the processor",
+          [x[0] for x in got] == [x[0] for x in want] and b.device() == "cpu")
 
 
 def test_reader_in_analysis():

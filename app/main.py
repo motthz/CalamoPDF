@@ -1288,6 +1288,12 @@ def selftest(pdf, out):
     report["sources"] = [l["source"] for l in res["ink"]]
     report["glyphs"] = len(s.learn_page(0)["hand"]["glyphs"])      # the letters: learned after the text
     report["fastReader"] = READER.fast_installed()
+    report["readerDevice"] = READER.device()
+    try:
+        import onnxruntime
+        report["providers"] = onnxruntime.get_available_providers()
+    except Exception:
+        pass
     if res["ink"]:
         s.edit_ink(0, res["ink"][-1]["id"], "Calamo")
     tmp = tempfile.mkdtemp()

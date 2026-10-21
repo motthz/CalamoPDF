@@ -37,20 +37,15 @@ jobs:
           CALAMO_MODEL_DIR: ${{ runner.temp }}/calamo-model
         run: python tools/reader_bench.py
 
-      - name: Forms of the handwriting model, speed and reading
+      - name: Handwriting model on the graphics card (DirectML), and the processor with plain onnxruntime
         env:
           CALAMO_MODEL_DIR: ${{ runner.temp }}/calamo-model
         run: |
-          pip install onnx sympy
-          python tools/encoder_variants.py "$env:RUNNER_TEMP/variants"
-
-      - name: Handwriting model on the graphics card (DirectML)
-        env:
-          CALAMO_MODEL_DIR: ${{ runner.temp }}/calamo-model
-        run: |
-          python -m venv "$env:RUNNER_TEMP/dml"
-          & "$env:RUNNER_TEMP/dml/Scripts/pip" install -q onnxruntime-directml numpy pillow tokenizers
-          & "$env:RUNNER_TEMP/dml/Scripts/python" tools/gpu_bench.py
+          python -c "import onnxruntime as o; print('onnxruntime', o.__version__, o.get_available_providers())"
+          python tools/gpu_bench.py
+          python -m venv "$env:RUNNER_TEMP/plain"
+          & "$env:RUNNER_TEMP/plain/Scripts/pip" install -q onnxruntime numpy pillow tokenizers
+          & "$env:RUNNER_TEMP/plain/Scripts/python" tools/reader_bench.py
 
       - name: A page of handwriting, 1.6.0 against this version (same computer)
         shell: pwsh
