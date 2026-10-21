@@ -32,7 +32,7 @@ from engine.ocr import available_languages  # noqa: E402
 from engine.storage import load_json, save_json  # noqa: E402
 import updater  # noqa: E402
 
-VERSION = "1.7.0"
+VERSION = "1.7.1"
 
 _user32 = ctypes.windll.user32
 _user32.FindWindowW.restype = wintypes.HWND
@@ -108,8 +108,9 @@ class Api:
         # the dictionary takes a moment to load: do it now, not on the first page read
         from engine.lexicon import LEXICON
         threading.Thread(target=LEXICON._load, daemon=True).start()
-        # an installation from before 1.7: the fast reader comes in the background
-        if self._settings.get("handModel", True) and READER.installed() and not READER.fast_installed():
+        # the fast reader (downloaded by an installation from before 1.7) and the choice of the
+        # faster encoder for this computer: in the background, before the first reading
+        if self._settings.get("handModel", True) and READER.installed():
             threading.Thread(target=self._fetch_fast, daemon=True).start()
         self.startup_path = next((a for a in sys.argv[1:] if a.lower().endswith(".pdf") and os.path.exists(a)), None)
 
@@ -1075,7 +1076,7 @@ class Api:
     @staticmethod
     def _fetch_fast():
         try:
-            READER.download_fast()
+            READER.prepare()
         except Exception:
             traceback.print_exc()             # tried again at the next start
 

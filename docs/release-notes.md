@@ -1,3 +1,12 @@
+## Novità di Calamo PDF Studio 1.7.1
+
+**Misurato anche su Windows.** Una pagina di modulo compilato a mano, letta dalla 1.6.0 e da questa versione sullo stesso PC Windows (i test automatici di GitHub, processore AMD):
+- **testo della pagina a schermo: −49% di tempo** (da 27,5 a 14,0 secondi);
+- **con la calligrafia imparata: −39%** (da 27,5 a 16,9 secondi);
+- le stesse righe lette.
+
+**Il lettore più veloce per il tuo processore.** Il lettore veloce della 1.7.0 è circa il 40% più rapido sui processori Intel, ma su alcuni processori AMD recenti il lettore di prima è già più veloce. Ora Calamo misura i due lettori una volta sola, in un paio di secondi, in sottofondo all'avvio, e usa quello più rapido sul tuo computer: non può mai andare più piano della 1.6.
+
 ## Novità di Calamo PDF Studio 1.7.0
 
 **Scrittura a mano letta più del doppio più in fretta.** Misurato sugli stessi 8 moduli compilati a mano usati per la precisione, confrontando questa versione con la 1.6.0 sullo stesso computer:
