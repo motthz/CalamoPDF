@@ -139,8 +139,27 @@ def measure_line(page, bbox, text=""):
 _LINES = {}          # while a line is being learned: its borders, found once for all its words
 
 
+_MEMO = None         # while a writing is being learned: the borders found, by area
+
+
+def _learn_area(bbox):
+    """The area whose borders serve a whole line: measuring it and learning its words."""
+    r = fitz.Rect(bbox)                      # (taller than the clip of a word: 0.35)
+    return fitz.Rect(r.x0 - 2, r.y0 - r.height * 0.4, r.x1 + 2, r.y1 + r.height * 0.4)
+
+
 def _line_borders(page, rect):
     """Borders and rules around a line of text: (pixmap origin, mask) at DPI."""
+    key = (id(page), tuple(round(v, 2) for v in fitz.Rect(rect)))
+    if _MEMO is not None and key in _MEMO:
+        return _MEMO[key]
+    out = _find_borders(page, rect)
+    if _MEMO is not None:
+        _MEMO[key] = out
+    return out
+
+
+def _find_borders(page, rect):
     from .letters import analyse
     rect = fitz.Rect(rect)
     h = max(rect.height, 4)
@@ -321,6 +340,10 @@ class HandwritingLibrary:
             return True
         return line.get("doubt", 0) <= (0.4 if line.get("source") == "ocr" else RELIABLE_DOUBT)
 
+    @staticmethod
+    def _short_piece(line):
+        return line.get("source") != "user" and bool(line.get("cell")) and len(line["text"].replace(" ", "")) < 8
+
     def learn_lines(self, page, items):
         """Learn a writing from all its lines [(line, src)]. Each line is measured first: a
         line whose size disagrees with the others (a dense cell where the measure caught
@@ -329,11 +352,27 @@ class HandwritingLibrary:
         # sure lines teach every word; the others only the words that are surely right
         good = [(l, j) for l, j in items if self.reliable(l)]
         metrics = {}
+        global _MEMO
+        _MEMO = {}                             # the borders around a line: found once for it
+        try:
+            self._learn_lines(page, good, metrics)
+        finally:
+            _MEMO = None
+            _LINES.pop(id(page), None)
+        self._prune()
+
+    def _learn_lines(self, page, good, metrics):
         for l, j in good:
+            if self._short_piece(l):
+                continue                       # not learned (below): not measured either
             try:
+                area = _learn_area(l["bbox"])
+                _LINES[id(page)] = (area, _line_borders(page, area))
                 metrics[j] = measure_line(page, l["bbox"], l["text"])
             except Exception:
                 pass
+            finally:
+                _LINES.pop(id(page), None)
         xhs = [m[1] for m in metrics.values()]
         med = float(np.median(xhs)) if len(xhs) >= 4 else None
         hs = [l["bbox"][3] - l["bbox"][1] for l, _ in good]
@@ -341,7 +380,7 @@ class HandwritingLibrary:
         for l, j in good:
             m = metrics.get(j)
             if l.get("source") != "user":
-                if l.get("cell") and len(l["text"].replace(" ", "")) < 8:
+                if self._short_piece(l):
                     continue           # a short piece cut at a table border: its letters are often cut too
                 if med and m and not (0.65 <= m[1] / med <= 1.5):
                     continue
@@ -349,7 +388,6 @@ class HandwritingLibrary:
                 if (med_h and h > med_h * 1.7) or _rows(page, l["bbox"]) > 1:
                     continue           # two lines of a cell read as one: its letters would mix them
             self.learn_line(page, l, j, m)
-        self._prune()
 
     def learn_line(self, page, line, src=None, metrics=None):
         """line: ink line dict with 'words' (text,bbox) and corrected 'text'."""
@@ -369,7 +407,7 @@ class HandwritingLibrary:
                 return
         lrect = fitz.Rect(line["bbox"])
         try:                                   # the borders around the line, once for all its words
-            area = fitz.Rect(lrect.x0 - 2, lrect.y0 - lrect.height * 0.3, lrect.x1 + 2, lrect.y1 + lrect.height * 0.3)
+            area = _learn_area(lrect)
             _LINES[id(page)] = (area, _line_borders(page, area))
         except Exception:
             _LINES.pop(id(page), None)
@@ -624,46 +662,62 @@ class HandwritingLibrary:
     @staticmethod
     def _strokes(ink):
         """Connected strokes of a word: a label per pixel (0 = paper) and, for each label,
-        (first column, last column, pixels, first row, last row)."""
+        (first column, last column, pixels, first row, last row). 8-connected; the labels
+        come in the order of their first pixel, row by row."""
+        ink = np.asarray(ink, bool)
         H, W = ink.shape
-        parent = [0]
-
-        def find(x):
-            while parent[x] != x:
-                parent[x] = parent[parent[x]]
-                x = parent[x]
-            return x
-        runs, prev = [], []
-        for y in range(H):
-            row = ink[y]
-            if not row.any():
-                prev = []
-                continue
-            d = np.diff(np.concatenate(([0], row.view(np.int8), [0])))
-            cur = []
-            j = 0
-            for s0, e0 in zip(np.where(d == 1)[0], np.where(d == -1)[0]):
-                lab = len(parent)
-                parent.append(lab)
-                while j < len(prev) and prev[j][1] < s0:
-                    j += 1
-                k = j
-                while k < len(prev) and prev[k][0] <= e0:      # 8-connected
-                    ra, rb = find(lab), find(prev[k][2])
-                    if ra != rb:
-                        parent[rb] = ra
-                    k += 1
-                cur.append((s0, e0, lab))
-                runs.append((y, s0, e0, lab))
-            prev = cur
         out = np.zeros((H, W), np.int32)
-        stats = {}
-        for y, s0, e0, lab in runs:
-            r = find(lab)
-            out[y, s0:e0] = r
-            st = stats.get(r)
-            stats[r] = (min(st[0], s0), max(st[1], e0), st[2] + e0 - s0, min(st[3], y), max(st[4], y + 1)) \
-                if st else (s0, e0, e0 - s0, y, y + 1)
+        if not ink.any():
+            return out, {}
+        pad = np.zeros((H, W + 2), np.int8)
+        pad[:, 1:-1] = ink
+        d = np.diff(pad, axis=1)
+        ry, rs = np.nonzero(d == 1)            # the runs of ink of every row, in order
+        re_ = np.nonzero(d == -1)[1]
+        n = len(ry)
+        # the runs of a row touching (8-connected) the runs of the row above
+        row_start = np.searchsorted(ry, np.arange(H + 1))
+        pa, pb = [], []
+        for y in range(1, H):
+            c0, c1, p0, p1 = row_start[y], row_start[y + 1], row_start[y - 1], row_start[y]
+            if c0 == c1 or p0 == p1:
+                continue
+            i0 = np.searchsorted(re_[p0:p1], rs[c0:c1], "left")     # above: end >= start
+            i1 = np.searchsorted(rs[p0:p1], re_[c0:c1], "right")    # above: start <= end
+            cnt = np.maximum(i1 - i0, 0)
+            if cnt.any():
+                cur = np.repeat(np.arange(c0, c1), cnt)
+                off = np.arange(cnt.sum()) - np.repeat(np.cumsum(cnt) - cnt, cnt)
+                pa.append(cur)
+                pb.append(p0 + np.repeat(i0, cnt) + off)
+        lab = np.arange(n)
+        if pa:
+            a, b = np.concatenate(pa), np.concatenate(pb)
+            while True:                        # every run takes the smallest label it touches
+                m = np.minimum(lab[a], lab[b])
+                new = lab.copy()
+                np.minimum.at(new, a, m)
+                np.minimum.at(new, b, m)
+                new = new[new]
+                while True:
+                    nxt = new[new]
+                    if (nxt == new).all():
+                        break
+                    new = nxt
+                if (new == lab).all():
+                    break
+                lab = new
+        roots, comp = np.unique(lab, return_inverse=True)            # by first run, row by row
+        ids = comp + 1
+        lengths = re_ - rs
+        cols = np.repeat(np.arange(n), lengths)
+        xs = np.repeat(rs, lengths) + (np.arange(lengths.sum()) - np.repeat(np.cumsum(lengths) - lengths, lengths))
+        out[ry[cols], xs] = ids[cols]
+        k = len(roots)
+        x0 = np.full(k, W); x1 = np.zeros(k, int); px = np.zeros(k, int); y0 = np.full(k, H); y1 = np.zeros(k, int)
+        np.minimum.at(x0, comp, rs); np.maximum.at(x1, comp, re_); np.add.at(px, comp, lengths)
+        np.minimum.at(y0, comp, ry); np.maximum.at(y1, comp, ry + 1)
+        stats = {int(i + 1): (int(x0[i]), int(x1[i]), int(px[i]), int(y0[i]), int(y1[i])) for i in range(k)}
         return out, stats
 
     # ------------------------------------------------------------------ marking letters by hand

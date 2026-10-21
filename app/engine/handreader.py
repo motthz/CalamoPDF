@@ -7,6 +7,7 @@ of handwriting at a time. The model (about 60 MB) is downloaded once, on request
 import json
 import os
 import threading
+import types
 import urllib.request
 
 import numpy as np
@@ -25,6 +26,10 @@ FILES = [("config.json", ["config.json"]),
          ("decoder.onnx", ["onnx/decoder_model_quantized.onnx", "onnx/decoder_model.onnx",
                            "onnx/decoder_model_merged_quantized.onnx", "onnx/decoder_model_merged.onnx"])]
 UA = "CalamoPDF-handreader"
+# the fast encoder (tools/make_fast_model.py), built and published by this project once:
+# downloaded after the files above (or in the background by an older installation); a
+# reading without it uses encoder.onnx, as before
+FAST = ("encoder_fast.onnx", ["https://github.com/motthz/CalamoPDF/releases/download/modello-veloce-1/encoder_fast.onnx"])
 
 
 def model_dir():
@@ -37,8 +42,12 @@ class HandReader:
     def __init__(self):
         self._lock = threading.Lock()
         self._enc = self._dec = self._tok = None
+        self._lanes = []
         self.error = None
+        self.use_fast = True             # the fast encoder when downloaded (tests compare both)
         self._seen = {}                  # line picture -> reading, the most recent 4000
+        self._aspects = {}               # line picture -> shape of its cleaned ink
+        self._mem = threading.Lock()
 
     # ------------------------------------------------------------------ installation
     def installed(self):
@@ -60,14 +69,50 @@ class HandReader:
         """Deletes the downloaded files (to download them again after an error)."""
         with self._lock:
             self._enc = self._dec = self._tok = None
+            self._lanes = []
             self.error = None
             d = model_dir()
-            for name, _ in FILES:
-                for f in (name, name + ".part"):
+            for name, _ in FILES + [FAST]:
+                for f in (name, name + ".part", name + ".new"):
                     try:
                         os.remove(os.path.join(d, f))
                     except OSError:
                         pass
+
+    def fast_installed(self):
+        return os.path.exists(os.path.join(model_dir(), FAST[0]))
+
+    def download_fast(self, progress=None):
+        """Fetch the fast encoder and check it opens; a reading in progress keeps the one it
+        has, the next ones use the new one. Returns True when it is there."""
+        if self.fast_installed():
+            return True
+        target = os.path.join(model_dir(), FAST[0])
+        last = None
+        for url in FAST[1]:
+            try:
+                self._fetch(url, target + ".new", lambda f: progress and progress(f))
+                import onnxruntime as ort
+                sess = ort.InferenceSession(target + ".new", providers=["CPUExecutionProvider"])
+                if [i.name for i in sess.get_inputs()][:1] != ["pixel_values"]:
+                    raise RuntimeError("file non valido")
+                del sess
+                os.replace(target + ".new", target)
+                last = None
+                break
+            except Exception as e:
+                last = e
+                try:
+                    os.remove(target + ".new")
+                except OSError:
+                    pass
+        if last is not None:
+            raise RuntimeError(f"Download del lettore veloce non riuscito: {last}")
+        with self._lock:                        # the next reading opens the fast encoder
+            if self._lanes and not any(l.lock.locked() for l in self._lanes):
+                self._enc = None
+                self._lanes = []
+        return True
 
     def download(self, progress=None):
         """Fetch the model files (resumable per file). progress(fraction)."""
@@ -88,6 +133,10 @@ class HandReader:
                     break
             if last is not None:
                 raise RuntimeError(f"Download del modello non riuscito ({name}): {last}")
+        try:
+            self.download_fast()
+        except Exception:
+            pass                               # the reading works without it, only slower
         if progress:
             progress(1.0)
         return True
@@ -130,12 +179,25 @@ class HandReader:
             import onnxruntime as ort
             from tokenizers import Tokenizer
             d = model_dir()
-            opts = ort.SessionOptions()
-            # every core: the reading runs in the background and the window is another process
-            opts.intra_op_num_threads = max(1, os.cpu_count() or 2)
-            prov = ["CPUExecutionProvider"]
-            self._enc = ort.InferenceSession(os.path.join(d, "encoder.onnx"), opts, providers=prov)
-            self._dec = ort.InferenceSession(os.path.join(d, "decoder.onnx"), opts, providers=prov)
+            # the fast encoder when it is there (see FAST): the same network with the operations
+            # of each layer fused and quantized per channel; else the one of the first download
+            fast = self.use_fast and os.path.exists(os.path.join(d, FAST[0]))
+            enc = FAST[0] if fast else "encoder.onnx"
+            # two readers side by side, with half of the cores each, read more lines in the
+            # same time than one with all of them (the model does not use many cores well)
+            cores = max(1, os.cpu_count() or 2)
+            lanes = max(1, min(4, cores // 2))      # 2 on 4 cores, 4 on 8 or more
+            self._lanes = []
+            for _ in range(lanes):
+                opts = ort.SessionOptions()
+                opts.intra_op_num_threads = max(1, cores // lanes)
+                opts.inter_op_num_threads = 1
+                prov = ["CPUExecutionProvider"]
+                self._lanes.append(types.SimpleNamespace(
+                    lock=threading.Lock(),
+                    enc=ort.InferenceSession(os.path.join(d, enc), opts, providers=prov),
+                    dec=ort.InferenceSession(os.path.join(d, "decoder.onnx"), opts, providers=prov)))
+            self._enc, self._dec = self._lanes[0].enc, self._lanes[0].dec
             self._tok = Tokenizer.from_file(os.path.join(d, "tokenizer.json"))
             cfg = {}
             for name in ("config.json", "generation_config.json"):
@@ -159,6 +221,7 @@ class HandReader:
             self._std = np.array(pc.get("image_std", [0.5, 0.5, 0.5]), np.float32)
             self._dec_inputs = {i.name: i for i in self._dec.get_inputs()}
             self._logits = [self._dec.get_outputs()[0].name]
+            self._enc_in = self._enc.get_inputs()[0].name
 
     @staticmethod
     def clean(rgb):
@@ -225,29 +288,102 @@ class HandReader:
         g = (x * 255).astype(np.uint8)
         return np.repeat(g[:, :, None], 3, axis=2)
 
+    def aspect(self, rgb):
+        """Width / height of the ink of a line, as the reader saw it (cleaned)."""
+        rgb = np.ascontiguousarray(rgb)
+        a = self._aspects.get(self._key(rgb, 0))
+        if a is None:
+            c = self.clean(rgb)
+            a = c.shape[1] / max(c.shape[0], 1)
+        return a
+
     def _pixels(self, rgb):
         from PIL import Image
-        img = Image.fromarray(self.clean(rgb))
+        c = self.clean(rgb)
+        with self._mem:
+            self._aspects[self._key(rgb, 0)] = c.shape[1] / max(c.shape[0], 1)
+            while len(self._aspects) > 4000:
+                self._aspects.pop(next(iter(self._aspects)))
+        img = Image.fromarray(c)
         img = img.resize((self._size[1], self._size[0]), Image.BILINEAR)
         x = (np.asarray(img, np.float32) / 255.0 - self._mean) / self._std
         return x.transpose(2, 0, 1)[None]
 
+    @staticmethod
+    def _key(rgb, max_tokens):
+        import hashlib
+        return hashlib.blake2b(rgb.tobytes(), digest_size=16).hexdigest() + str(rgb.shape) + str(max_tokens)
+
+    def _remember(self, key, value):
+        with self._mem:                         # several readers write at the same time
+            self._seen[key] = value
+            while len(self._seen) > 4000:
+                self._seen.pop(next(iter(self._seen)))
+
     def read(self, rgb, max_tokens=48):
         """Reads one line image (H x W x 3, uint8). Returns (text, confidence 0..1).
-        A line already read (the page read again, a writing marked again) is not read twice."""
-        import hashlib
+        A line already read (the page read again, a writing marked again, a line read ahead
+        by read_ahead) is not read twice."""
         rgb = np.ascontiguousarray(rgb)
-        key = hashlib.blake2b(rgb.tobytes(), digest_size=16).hexdigest() + str(rgb.shape) + str(max_tokens)
+        key = self._key(rgb, max_tokens)
         hit = self._seen.get(key)
         if hit is None:
-            hit = self._seen[key] = self._read(rgb, max_tokens)
-            if len(self._seen) > 4000:
-                self._seen.pop(next(iter(self._seen)))
+            self._load()
+            hit = self._read(rgb, max_tokens, self._free_lane())
+            self._remember(key, hit)
         return hit
 
-    def _read(self, rgb, max_tokens):
+    def _free_lane(self):
+        for lane in self._lanes:
+            if not lane.lock.locked():
+                return lane
+        return self._lanes[0]
+
+    def read_ahead(self, crops, max_tokens=48, cancelled=None):
+        """Read many lines at once, each reader taking the next one as soon as it is free;
+        the results wait in memory for read(). Returns how many were read."""
         self._load()
-        hidden = self._enc.run(None, {self._enc.get_inputs()[0].name: self._pixels(rgb)})[0]
+        todo, keys = [], set()
+        for c in crops:
+            c = np.ascontiguousarray(c)
+            k = self._key(c, max_tokens)
+            if k not in self._seen and k not in keys and c.size:
+                keys.add(k)
+                todo.append((k, c))
+        if not todo:
+            return 0
+        queue = list(reversed(todo))
+        guard = threading.Lock()
+
+        def work(lane):
+            while True:
+                if cancelled and cancelled():
+                    return
+                with guard:
+                    if not queue:
+                        return
+                    k, c = queue.pop()
+                try:
+                    self._remember(k, self._read(c, max_tokens, lane))
+                except Exception:
+                    return
+        threads = [threading.Thread(target=work, args=(lane,), daemon=True) for lane in self._lanes[1:]]
+        for t in threads:
+            t.start()
+        work(self._lanes[0])
+        for t in threads:
+            t.join()
+        return len(todo)
+
+    def _read(self, rgb, max_tokens, lane=None):
+        self._load()
+        lane = lane or self._lanes[0]
+        px = self._pixels(rgb)
+        with lane.lock:
+            hidden = lane.enc.run(None, {self._enc_in: px})[0]
+            return self._decode(lane, hidden, max_tokens)
+
+    def _decode(self, lane, hidden, max_tokens):
         ids, logps = [self._start], []
         for _ in range(max_tokens):
             feeds = {}
@@ -264,7 +400,7 @@ class HandReader:
                     shape = [1 if not isinstance(d, int) else d for d in inp.shape]
                     shape[2] = 0 if ".decoder." in name else hidden.shape[1]
                     feeds[name] = np.zeros(shape, dtype=np.float32)
-            logits = self._dec.run(self._logits, feeds)[0][0, -1]     # only the logits are used
+            logits = lane.dec.run(self._logits, feeds)[0][0, -1]     # only the logits are used
             logits = logits - logits.max()
             p = np.exp(logits)
             p /= p.sum()

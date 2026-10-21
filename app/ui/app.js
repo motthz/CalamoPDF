@@ -1081,6 +1081,13 @@ async function analyze(all) {
     if (!S.doc || S.docGen !== doc) return;
     updateInfo(await call("info"));
     renderInkList();
+    // the text is on screen: the letters of the writings are learned now, in the background
+    if (done && pages.includes(S.current)) {
+      const cur = S.current;
+      status("Imparo la calligrafia della pagina…");
+      call("learn_page", cur).then(info => { if (S.docGen === doc) applyHand(info, cur); })
+        .catch(() => {}).finally(() => status(""));
+    }
     if (job.cancelled) { toast(`Lettura interrotta: ${done} ${done === 1 ? "pagina letta" : "pagine lette"}.`, ""); return; }
     if (skipped.length) toast(`Hai modificato ${skipped.length === 1 ? "la pagina " : "le pagine "}${skipped.join(", ")} durante la lettura: rileggi${skipped.length === 1 ? "la" : "le"} quando vuoi.`, "");
     if (!found) toast("Non ho trovato scrittura a mano o testo scansionato.", "");

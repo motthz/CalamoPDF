@@ -22,7 +22,8 @@ s.edit_block(0, body["bbox"], body["text"].replace("terzo trimestre", "terzo tri
 res = s.analyze(0)
 for l in res["ink"]:
     print("INK", l["id"], l["source"], l["doubt"], repr(l["text"]))
-print("GLYPHS", "".join(g["char"] for g in res["hand"]["glyphs"]), res["hand"]["ink"])
+hand = s.learn_page(0)["hand"]
+print("GLYPHS", "".join(g["char"] for g in hand["glyphs"]), hand["ink"])
 ink = res["ink"]
 if ink:
     target = ink[-1]

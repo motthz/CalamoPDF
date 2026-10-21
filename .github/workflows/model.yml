@@ -1,0 +1,37 @@
+# Builds the fast handwriting encoder (tools/make_fast_model.py) and publishes it as the
+# asset of a pre-release, "modello-veloce-1", which the app downloads (app/engine/handreader.py,
+# FAST). Pre-release: the automatic updates of the app never take it for a new version.
+# Run it by hand from the Actions tab (once; again only if the script changes).
+name: Fast model
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Build the fast encoder
+        run: |
+          python -m pip install onnxruntime==1.29.0 onnx==1.23.2 sympy
+          python tools/make_fast_model.py build/fast
+          sha256sum build/fast/encoder_fast.onnx | tee build/fast/encoder_fast.onnx.sha256
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: modello-veloce-1
+          target_commitish: ${{ github.sha }}
+          name: Lettore della scrittura a mano, versione veloce
+          prerelease: true
+          body: |
+            Il codificatore delle immagini di TrOCR small handwritten (Microsoft, licenza MIT; conversione ONNX di Xenova) con le operazioni di ogni livello unite e i pesi a 8 bit per canale: circa il 40% di tempo in meno a riga, con la stessa precisione sui moduli di prova. Calamo PDF Studio lo scarica da solo; non serve scaricarlo a mano.
+          files: |
+            build/fast/encoder_fast.onnx
+            build/fast/encoder_fast.onnx.sha256

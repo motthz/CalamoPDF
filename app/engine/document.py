@@ -245,6 +245,7 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin, PdfToolsMixin):
             self.dirty = False
             self.undo_stack, self.redo_stack = [], []
             self.ink, self.page_versions, self.hands = {}, {}, {}
+            self._to_learn = set()
             self.ignored = {}
             self.resolver = F.FontResolver(doc)
             self.version += 1
@@ -258,6 +259,7 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin, PdfToolsMixin):
             self.dirty = True
             self.undo_stack, self.redo_stack = [], []
             self.ink, self.page_versions, self.hands = {}, {}, {}
+            self._to_learn = set()
             self.ignored = {}
             self.resolver = F.FontResolver(doc)
             self.version += 1
@@ -271,6 +273,7 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin, PdfToolsMixin):
             self.dirty = True
             self.undo_stack, self.redo_stack = [], []
             self.ink, self.page_versions, self.hands = {}, {}, {}
+            self._to_learn = set()
             self.ignored = {}
             self.resolver = F.FontResolver(doc)
             self.version += 1
@@ -380,10 +383,7 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin, PdfToolsMixin):
                     store[i] = value
             self.page_versions[i] = max(ver, self.page_versions.get(i, 0)) + 1
             if self.ink.get(i):
-                try:
-                    self._relearn(i)
-                except Exception:
-                    pass
+                self.__dict__.setdefault("_to_learn", set()).add(i)       # learned when needed
         else:
             dst.append(self._snapshot())
             _, data, ink, versions, self.hands = snap
@@ -928,9 +928,29 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin, PdfToolsMixin):
                         "kind": l.get("kind", "hand"), "style": l.get("style")})
         return out
 
-    def _result(self, index, sid=None, **extra):
+    def _result(self, index, sid=None, learn=True, **extra):
         """What the UI needs after a change: the lines, and the writings of the page."""
-        return {"ink": self._ink_public(index), **self.hand_info(index, sid), **extra}
+        return {"ink": self._ink_public(index), **self.hand_info(index, sid, learn), **extra}
+
+    def learn_page(self, index):
+        """Learn the letters of a page read with analyze() (if not learned yet): the panel
+        asks for it right after the text is shown. One writing at a time, letting go of the
+        document in between, so the window stays free. Returns the writings of the page."""
+        with self.lock:
+            todo = self.__dict__.setdefault("_to_learn", set())
+            sids = []
+            if index in todo:
+                todo.discard(index)
+                if self.ink.get(index):
+                    sids = list(self.writings(index, learn=False).libs)
+            doc = self.doc
+        for sid in sids:
+            with self.lock:
+                if self.doc is not doc or index >= len(self.doc):
+                    break
+                self._relearn(index, {sid})
+        with self.lock:
+            return {**self.hand_info(index), "learned": True}
 
     def _doc_words(self, index):
         """Words already on the page (digital text and confirmed readings): the dictionary
@@ -980,8 +1000,10 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin, PdfToolsMixin):
                     l["style"], l["kind"] = sid, kind
             self.ink[index] = lines
             self._carry_over(old, pw)
-            self._relearn(index)
-            return self._result(index, read=sum(1 for l in lines if l["source"] != "unread"),
+            # the letters of the writings are learned when they are first needed (rewriting,
+            # the panel of the letters: see learn_page), not before the text is shown
+            self.__dict__.setdefault("_to_learn", set()).add(index)
+            return self._result(index, learn=False, read=sum(1 for l in lines if l["source"] != "unread"),
                                 model=sum(1 for l in lines if l["source"] == "model"))
 
     def _is_ignored(self, index, bbox):
@@ -1087,18 +1109,25 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin, PdfToolsMixin):
 
     def _relearn(self, index, sids=None):
         """Learn every writing of the page from its own lines only."""
+        if sids is None:
+            self.__dict__.setdefault("_to_learn", set()).discard(index)
         page = self.doc[index]
-        pw = self.writings(index)
+        pw = self.writings(index, learn=False)
         for sid, lib in pw.libs.items():
             if sids is not None and sid not in sids:
                 continue
             lib.learn_lines(page, [(l, j) for j, l in enumerate(self.ink.get(index, [])) if l.get("style") == sid])
 
     # ------------------------------------------------------------------ writings of a page
-    def writings(self, index):
-        """The writings (people, typefaces) of one page, created empty the first time."""
+    def writings(self, index, learn=True):
+        """The writings (people, typefaces) of one page, created empty the first time; the
+        letters of a page just read are learned here, the first time they are needed."""
         if index not in self.hands:
             self.hands[index] = PageWritings()
+        if learn and index in self.__dict__.setdefault("_to_learn", set()):
+            self._to_learn.discard(index)
+            if self.ink.get(index):
+                self._relearn(index)
         return self.hands[index]
 
     def _lib(self, index, sid=None, kind="hand"):
@@ -1119,8 +1148,8 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin, PdfToolsMixin):
             line["style"] = lib.sid
         return lib
 
-    def hand_info(self, index, sid=None):
-        pw = self.writings(index)
+    def hand_info(self, index, sid=None, learn=True):
+        pw = self.writings(index, learn)
         lines = self.ink.get(index, [])
         lib = pw.get(sid) if sid is not None else (pw.default("hand") or pw.default("print"))
         return {"styles": pw.listing(lines), "selected": lib.sid if lib else None,

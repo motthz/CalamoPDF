@@ -1,3 +1,19 @@
+## Novità di Calamo PDF Studio 1.7.0
+
+**Scrittura a mano letta più del doppio più in fretta.** Misurato sugli stessi 8 moduli compilati a mano usati per la precisione, confrontando questa versione con la 1.6.0 sullo stesso computer:
+- **testo della pagina a schermo: −58% di tempo** (da 35,1 a 14,7 secondi a pagina, 2,4 volte più veloce);
+- **anche con la calligrafia imparata** (per riscrivere a mano): −48% (da 35,1 a 18,3 secondi);
+- **il lettore della scrittura a mano, riga per riga: −60%** (da 0,23 a 0,09 secondi);
+- **precisione invariata**: celle del modulo lette giuste 44,0% (prima 43,8%); la riscrittura con la calligrafia si rilegge un po' meglio (errore 0,49, prima 0,50).
+
+Come:
+- **Lettore veloce**: lo stesso modello, con le operazioni di ogni livello unite in una sola e i pesi compressi in modo più fedele. Si scarica da solo una volta (22 MB); finché non c'è, Calamo usa quello di prima, comunque più veloce di prima (−41% a pagina).
+- **Più lettori in parallelo**: le righe di una pagina vengono preparate tutte insieme e lette da due lettori contemporaneamente (quattro sui computer con 8 o più core).
+- **Il testo compare subito**: le lettere della calligrafia si imparano dopo, mentre puoi già lavorare, e senza bloccare il documento. Esportare in Word, rendere cercabile un PDF o tradurlo non perdono più tempo a imparare la calligrafia.
+- **Righe già lette** non vengono rilette; le scritture della pagina si separano 35 volte più in fretta; la stessa zona della pagina non viene più analizzata due volte.
+
+**Correzione.** Unendo una scrittura piccola a una grande (stessa penna), Calamo poteva unirla alla scrittura sbagliata o fermarsi con un errore.
+
 ## Novità di Calamo PDF Studio 1.6.0
 
 **Più veloce.**

@@ -100,6 +100,35 @@ def distance(f, g):
     return c / 45.0 + (sw * 0.6 + sl * 0.6 + hand * 0.6) * rel + hs * 0.5
 
 
+def _arrays(feats):
+    """The features of many lines as columns, for distances computed all at once."""
+    ink = np.array([f["ink"] for f in feats], np.float64).reshape(len(feats), 3)
+    return {"ink": ink, "m": ink.mean(axis=1), "da": ink - ink.mean(axis=1, keepdims=True),
+            "ls": np.log(np.maximum([f["stroke"] for f in feats], 1e-3)),
+            "slant": np.array([f["slant"] for f in feats], np.float64),
+            "lh": np.log(np.maximum([f["height"] for f in feats], 1)),
+            "hand": np.array([f["hand"] for f in feats], np.float64),
+            "w": np.array([f.get("w", 1.0) for f in feats], np.float64)}
+
+
+def _colour_rows(A, B):
+    """_colour_dist between every line of A and every line of B (matrix)."""
+    d = A["da"][:, None, :] - B["da"][None, :, :]
+    return np.sqrt((d * d).sum(axis=2)) + np.abs(A["m"][:, None] - B["m"][None, :]) * 0.35
+
+
+def _distance_rows(A, B):
+    """distance() between every line of A and every line of B (matrix), the same formula."""
+    c = _colour_rows(A, B)
+    rel = np.minimum(A["w"][:, None], B["w"][None, :])
+    sw = np.abs(A["ls"][:, None] - B["ls"][None, :]) / 0.45
+    sl = np.abs(A["slant"][:, None] - B["slant"][None, :]) / 14.0
+    hs = np.abs(A["lh"][:, None] - B["lh"][None, :]) / 0.5
+    hand = np.abs(A["hand"][:, None] - B["hand"][None, :]) / 0.6
+    d = c / 45.0 + (sw * 0.6 + sl * 0.6 + hand * 0.6) * rel + hs * 0.5
+    return np.where(c > 55, 9.0, d)
+
+
 def _mean(feats):
     w = np.array([f.get("w", 1.0) for f in feats])
     return {"w": float(min(1.0, w.sum())),
@@ -115,38 +144,47 @@ def group(feats, threshold=1.0, boxes=None):
     With boxes, pieces on the same text row written with the same ink start together."""
     n = len(feats)
     groups = [[i] for i in range(n)]
-    if boxes:
-        for i in range(n):
-            for j in range(i + 1, n):
-                a, b = boxes[i], boxes[j]
-                inter = min(a[3], b[3]) - max(a[1], b[1])
-                same_row = inter / max(min(a[3] - a[1], b[3] - b[1]), 1e-3) >= 0.55
-                near = max(b[0] - a[2], a[0] - b[2], 0) < 3 * max(a[3] - a[1], b[3] - b[1])
-                f, g = feats[i], feats[j]
-                similar = (_colour_dist(f["ink"], g["ink"]) < 30
-                           and abs(math.log(max(f["height"], 1) / max(g["height"], 1))) < 0.35
-                           # a printed label next to a signature: same black, but print vs hand
-                           and (min(f.get("w", 1), g.get("w", 1)) < 0.6 or abs(f["hand"] - g["hand"]) < 0.35))
-                if same_row and near and similar:
-                    gi = next(g for g in groups if i in g)
-                    gj = next(g for g in groups if j in g)
-                    if gi is not gj:
-                        gi.extend(gj)
-                        groups.remove(gj)
+    if boxes and n > 1:
+        # (all the pairs at once: a form has hundreds of pieces of writing)
+        F = _arrays(feats)
+        b = np.array(boxes, np.float64).reshape(n, 4)
+        hgt = b[:, 3] - b[:, 1]
+        inter = np.minimum(b[:, None, 3], b[None, :, 3]) - np.maximum(b[:, None, 1], b[None, :, 1])
+        same_row = inter / np.maximum(np.minimum(hgt[:, None], hgt[None, :]), 1e-3) >= 0.55
+        gap = np.maximum(np.maximum(b[None, :, 0] - b[:, None, 2], b[:, None, 0] - b[None, :, 2]), 0)
+        near = gap < 3 * np.maximum(hgt[:, None], hgt[None, :])
+        similar = ((_colour_rows(F, F) < 30) & (np.abs(F["lh"][:, None] - F["lh"][None, :]) < 0.35)
+                   # a printed label next to a signature: same black, but print vs hand
+                   & ((np.minimum(F["w"][:, None], F["w"][None, :]) < 0.6)
+                      | (np.abs(F["hand"][:, None] - F["hand"][None, :]) < 0.35)))
+        link = np.triu(same_row & near & similar, 1)
+        owner = list(range(n))                 # the group of every line
+        for i, j in zip(*np.nonzero(link)):    # the pairs in the same order as one by one
+            gi, gj = owner[i], owner[j]
+            if gi != gj:
+                groups[gi].extend(groups[gj])
+                for k in groups[gj]:
+                    owner[k] = gi
+                groups[gj] = None
+        groups = [g for g in groups if g is not None]
     cents = [_mean([feats[k] for k in g]) for g in groups]
+    # the closest two writings merge, one pair at a time; the distances are kept in a table
+    # and only the row of the merged writing is computed again
+    if len(groups) > 1:
+        D = _distance_rows(_arrays(cents), _arrays(cents))
+        D[np.tril_indices(len(groups))] = np.inf
     while len(groups) > 1:
-        best, pair = threshold, None
-        for i in range(len(groups)):
-            for j in range(i + 1, len(groups)):
-                d = distance(cents[i], cents[j])
-                if d < best:
-                    best, pair = d, (i, j)
-        if pair is None:
+        k = int(np.argmin(D))
+        i, j = divmod(k, len(groups))
+        if not D[i, j] < threshold:
             break
-        i, j = pair
         groups[i] += groups.pop(j)
         cents.pop(j)
         cents[i] = _mean([feats[k] for k in groups[i]])
+        D = np.delete(np.delete(D, j, axis=0), j, axis=1)
+        row = _distance_rows(_arrays([cents[i]]), _arrays(cents))[0]
+        D[i, :] = np.where(np.arange(len(groups)) > i, row, np.inf)
+        D[:, i] = np.where(np.arange(len(groups)) < i, row, np.inf)
     # a few lines that came out a little different from a big writing in the same pen (a
     # hurried line, a crowded cell) are the same person, not another one
     if n >= 8:
@@ -163,9 +201,12 @@ def group(feats, threshold=1.0, boxes=None):
                 f = cents[j]
                 if (distance(c, f) < threshold * 2.2 and _colour_dist(c["ink"], f["ink"]) < 30
                         and abs(c["hand"] - f["hand"]) < 0.45):
-                    groups[j] += groups.pop(i)
+                    # (j moves down by one when the group before it goes)
+                    moving = groups.pop(i)
                     cents.pop(i)
-                    cents[j - (1 if i < j else 0)] = _mean([feats[k] for k in groups[j - (1 if i < j else 0)]])
+                    j -= 1 if i < j else 0
+                    groups[j] += moving
+                    cents[j] = _mean([feats[k] for k in groups[j]])
                     changed = True
                     break
     out = [0] * n
