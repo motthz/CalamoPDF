@@ -26,12 +26,6 @@ jobs:
           path: ${{ runner.temp }}/calamo-model
           key: trocr-small-handwritten-v1
 
-      - name: Engine and updater tests
-        env:
-          CALAMO_MODEL_DIR: ${{ runner.temp }}/calamo-model
-          CALAMO_GITHUB_TOKEN: ${{ github.token }}
-        run: python tools/test_windows.py
-
       - name: Handwriting reader speed, part by part
         env:
           CALAMO_MODEL_DIR: ${{ runner.temp }}/calamo-model
@@ -46,6 +40,12 @@ jobs:
           python -m venv "$env:RUNNER_TEMP/plain"
           & "$env:RUNNER_TEMP/plain/Scripts/pip" install -q onnxruntime numpy pillow tokenizers
           & "$env:RUNNER_TEMP/plain/Scripts/python" tools/reader_bench.py
+
+      - name: Engine and updater tests
+        env:
+          CALAMO_MODEL_DIR: ${{ runner.temp }}/calamo-model
+          CALAMO_GITHUB_TOKEN: ${{ github.token }}
+        run: python tools/test_windows.py
 
       - name: A page of handwriting, 1.6.0 against this version (same computer)
         shell: pwsh

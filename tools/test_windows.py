@@ -921,7 +921,7 @@ def test_release_check():
 
 
 if __name__ == "__main__":
-    for t in (test_ocr, test_writings, test_skewed_scan, test_handreader, test_reader_speed, test_reader_in_analysis, test_table_form, test_rewrite_keeps_background, test_remove_and_mark,
+    for t in (test_ocr, test_writings, test_skewed_scan, test_handreader, test_reader_speed, test_reader_gpu_path, test_reader_in_analysis, test_table_form, test_rewrite_keeps_background, test_remove_and_mark,
               test_rotated_page_edit, test_editing, test_more, test_graphics, test_real_services, test_export_scan, test_print_now, test_portable_swap,
               test_setup_script, test_release_check):
         try:
