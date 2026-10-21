@@ -1,7 +1,7 @@
 ## Novità di Calamo PDF Studio 1.6.0
 
 **Più veloce.**
-- **Avvio**: la versione installata non si scompatta più a ogni apertura (prima estraeva circa 200 MB nella cartella temporanea prima di partire). La versione portabile resta un unico file.
+- **Avvio circa 6 volte più rapido**: la versione installata non si scompatta più a ogni apertura (prima estraeva circa 200 MB nella cartella temporanea prima di partire). Misurato su Windows: da 3,6 a 0,6 secondi prima che l'app sia pronta. La versione portabile resta un unico file.
 - **Scorrere e ingrandire le pagine** è più fluido: le immagini delle pagine arrivano alla finestra da un piccolo server interno, raggiungibile solo da questo computer, e il visualizzatore le carica da solo, più di una alla volta. Prima ogni pagina passava come un testo di qualche megabyte che bloccava la finestra finché non era arrivato tutto.
 - **Rileggere una pagina già letta** è circa 3 volte più veloce: le righe già lette non vengono rilette dal lettore della scrittura a mano.
 - **Cerca dati sensibili** su un documento di 500 pagine: da 15 a 7 secondi; quando non trova nulla è circa 13 volte più veloce.
