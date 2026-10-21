@@ -67,6 +67,25 @@ const ok = (name, cond, extra = "") => { console.log((cond ? "PASS " : "FAIL ") 
   const pm = await p.$$eval("#printMenu button", bs => bs.map(b => b.querySelector("b").textContent));
   ok("stampa: tre possibilità", pm.length === 3 && pm[1].includes("tutto") && pm[2].includes("pagina"), JSON.stringify(pm));
   await p.keyboard.press("Escape"); await W(200);
+  // ---- the pictures of the pages come from the local picture server, not through the bridge
+  ok("pagine caricate dal server delle immagini", await p.evaluate(() => S.pages[0].img.src.startsWith("blob:")),
+    await p.evaluate(() => S.pages[0].img.src.slice(0, 30)));
+  // ---- the menu of the right mouse button
+  await geo(400); await W(300);
+  let g = await geo(400);
+  await p.mouse.click(g.x + 400 * g.s, g.y + 520 * g.s, { button: "right" }); await W(400);
+  const ctx = await p.$$eval("#ctxMenu button span", e => e.map(x => x.textContent));
+  ok("menu del tasto destro sulla pagina", ctx.includes("Aggiungi testo") && ctx.includes("Ruota la pagina"), JSON.stringify(ctx));
+  await p.click("#ctxMenu button:has-text('Ruota la pagina')"); await W(2000);
+  const rot = await p.evaluate(async () => (await call("info")).pages[0]);
+  ok("ruota la pagina dal menu", rot.w > rot.h, JSON.stringify(rot));
+  await p.keyboard.press("Control+z"); await W(1500);
+  // ---- the panel on the right can be hidden and shown again
+  await p.click("#btnPanel"); await W(400);
+  const closed = await p.evaluate(() => document.body.classList.contains("panel-closed") && !document.querySelector("#inspector").offsetWidth);
+  await p.click("#btnPanel"); await W(400);
+  const open = await p.evaluate(() => !document.body.classList.contains("panel-closed") && document.querySelector("#inspector").offsetWidth > 200);
+  ok("pannello a destra nascosto e riaperto", closed && open);
   // ---- a scan not read yet: each writing and a mark inside the table can be taken by itself
   Q("scan_tab.pdf"); await p.keyboard.press("Control+o"); await W(2500);
   await p.keyboard.press("m"); await W(4000);

@@ -32,7 +32,7 @@ from engine.ocr import available_languages  # noqa: E402
 from engine.storage import load_json, save_json  # noqa: E402
 import updater  # noqa: E402
 
-VERSION = "1.5.2"
+VERSION = "1.6.0"
 
 _user32 = ctypes.windll.user32
 _user32.FindWindowW.restype = wintypes.HWND
@@ -65,7 +65,7 @@ UNLOCKED = {"tabs", "dirty_tabs", "boot", "check_update", "download_update", "pr
             "open_release_page", "install_pending_update", "set_settings", "minimize", "toggle_maximize", "close",
             "analyze", "mark_ink", "cancel_analysis", "model_status", "model_download", "open_url", "reveal",
             "languages_translate", "translate_doc", "log_error", "print_now", "printer",
-            "export_docx", "export_xlsx", "export_other"}
+            "export_docx", "export_xlsx", "export_other", "image_base"}
 
 
 def safe(fn):
@@ -988,6 +988,21 @@ class Api:
 
     # ---------------------------------------------------------------- pages
     @safe
+    def looks_scanned(self):
+        """Is the document a scan (a picture on its first pages)? The panel shown first
+        depends on it: reading the handwriting for a scan, the pages for the others."""
+        doc = self._s.doc
+        return any(self._s._is_scan(doc[i]) for i in range(min(len(doc), 5)))
+
+    @safe
+    def image_base(self):
+        """The address the window loads the page pictures from (see images.py)."""
+        if getattr(self, "_images", None) is None:
+            import images
+            self._images = images.start(lambda: list(self._tabs))
+        return self._images
+
+    @safe
     def render(self, index, scale, fmt="png"):
         return self._s.render(index, scale, fmt)
 
@@ -1299,6 +1314,10 @@ def _crash_log():
 
 
 def main():
+    if "--startup-test" in sys.argv:          # how long the app takes to be ready (tests)
+        with open(sys.argv[sys.argv.index("--startup-test") + 1], "w", encoding="utf-8") as f:
+            json.dump({"version": VERSION, "ready": True}, f)
+        return
     if "--selftest" in sys.argv:
         i = sys.argv.index("--selftest")
         try:

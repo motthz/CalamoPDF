@@ -850,14 +850,7 @@ class PdfToolsMixin:
         from .document import REDACT_KW
         changed = []
         resolver = F.FontResolver(doc)
-        widths = {}                                 # the same words come back on every page
-
-        def length(font, part, size):
-            k = (id(font), part, size)
-            w = widths.get(k)
-            if w is None:
-                w = widths[k] = font.text_length(part, fontsize=size)
-            return w
+        from .document import text_width as length
 
         def append(tw, x, y, text, font, size):
             # like _append_words (no space glyphs), with the widths remembered
@@ -865,7 +858,6 @@ class PdfToolsMixin:
                 if part and not part.startswith(" "):
                     tw.append((x, y), part, font=font, fontsize=size)
                 x += length(font, part, size)
-        fonts_kept = []                             # the widths are keyed by font: keep them alive
         for i, page in enumerate(doc):
             if progress:
                 progress(i, len(doc))
@@ -915,7 +907,6 @@ class PdfToolsMixin:
                     size = s["size"]
                     color = tuple(((s["color"] >> k) & 255) / 255 for k in (16, 8, 0))
                     o = fitz.Point(s["origin"])
-                    fonts_kept.append(font)
                     tw = fitz.TextWriter(page.rect, color=color)
                     append(tw, o.x, o.y, text, font, size)
                     want = math.hypot(s["bbox"][2] - s["bbox"][0], s["bbox"][3] - s["bbox"][1]) if angle else s["bbox"][2] - s["bbox"][0]

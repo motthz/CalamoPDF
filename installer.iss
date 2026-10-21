@@ -1,7 +1,7 @@
 ; Inno Setup script for Calamo PDF Studio
 #define AppName "Calamo PDF Studio"
 #ifndef AppVersion
-  #define AppVersion "1.5.1"
+  #define AppVersion "1.6.0"
 #endif
 #define AppExe "CalamoPDF.exe"
 
@@ -37,8 +37,13 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 Name: "openwith"; Description: "Aggiungi ""Apri con Calamo"" ai file PDF"; GroupDescription: "Integrazione:"
 
+[InstallDelete]
+; the libraries of the previous version: a fresh copy every time
+Type: filesandordirs; Name: "{app}\_internal"
+
 [Files]
-Source: "dist\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
+; the folder build: the app starts without unpacking itself first
+Source: "dist\CalamoPDF-app\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 

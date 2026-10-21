@@ -66,3 +66,19 @@ jobs:
           Start-Process -FilePath dist\CalamoPDF.exe -ArgumentList "--selftest", "samples\esempio.pdf", "`"$out`"" -Wait
           Get-Content $out
           if (-not (Select-String -Path $out -Pattern '"ok": true' -Quiet)) { throw "self-test failed" }
+          $out2 = Join-Path $env:RUNNER_TEMP "selftest2.json"
+          Start-Process -FilePath dist\CalamoPDF-app\CalamoPDF.exe -ArgumentList "--selftest", "samples\esempio.pdf", "`"$out2`"" -Wait
+          if (-not (Select-String -Path $out2 -Pattern '"ok": true' -Quiet)) { Get-Content $out2; throw "self-test of the folder build failed" }
+
+      - name: Start-up time (portable one-file exe and installed folder)
+        shell: pwsh
+        run: |
+          $ready = Join-Path $env:RUNNER_TEMP "ready.json"
+          foreach ($exe in @("dist\CalamoPDF.exe", "dist\CalamoPDF-app\CalamoPDF.exe")) {
+            $times = foreach ($k in 1..3) {
+              Remove-Item $ready -ErrorAction SilentlyContinue
+              (Measure-Command { Start-Process -FilePath $exe -ArgumentList "--startup-test", "`"$ready`"" -Wait }).TotalSeconds
+            }
+            if (-not (Test-Path $ready)) { throw "$exe did not start" }
+            "{0}: {1}" -f $exe, (($times | ForEach-Object { "{0:N1}s" -f $_ }) -join ", ")
+          }
