@@ -44,18 +44,16 @@ def paper(gray, k):
 
 def _runs(mask, axis):
     """For every pixel of mask, the length of the run of mask it belongs to along axis."""
-    m = mask if axis == 0 else mask.T
-    H, W = m.shape
-    out = np.zeros((H, W), np.int32)
-    up = np.zeros(W, np.int32)
-    for i in range(H):                       # length so far, going down
-        up = np.where(m[i], up + 1, 0)
-        out[i] = up
-    down = np.zeros(W, np.int32)
-    for i in range(H - 1, -1, -1):           # spread the total back up the run
-        down = np.where(m[i], np.maximum(out[i], down), 0)
-        out[i] = down
-    return out if axis == 0 else out.T
+    t = np.ascontiguousarray(mask.T if axis == 0 else mask)        # the runs go along the rows of t
+    if not t.any():
+        return np.zeros(mask.shape, np.int32)
+    prev = np.zeros_like(t)
+    prev[:, 1:] = t[:, :-1]
+    run = np.cumsum((t & ~prev).ravel()).reshape(t.shape) * t       # a number for every run
+    length = np.bincount(run.ravel())
+    length[0] = 0
+    out = length[run].astype(np.int32)
+    return out.T if axis == 0 else out
 
 
 def analyse(rgb, letter_h):

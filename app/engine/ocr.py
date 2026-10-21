@@ -145,7 +145,8 @@ class Learning:
 # --------------------------------------------------------------------------- page analysis
 def _native_rects(page):
     rects = []
-    d = page.get_text("dict")
+    # (without the pictures: on a scan the dict would carry the whole image along)
+    d = page.get_text("dict", flags=fitz.TEXTFLAGS_DICT & ~fitz.TEXT_PRESERVE_IMAGES)
     for b in d["blocks"]:
         if b.get("type") != 0:
             continue
@@ -360,11 +361,18 @@ def read_page(job, learning, lang_tag=None, reader=None, lexicon=None, prefer=No
     if reader is not None:
         # the reader reads whole lines: give it the pieces the OCR split back together
         result = _join_pieces(result, rgb, zoom, border)
+    # handwriting, and any ink nobody read (the OCR may miss print on a poor photo)
+    second = [l for l in result if l["kind"] == "hand" or (l["source"] == "unread" and reader is not None)]
+    ids = {id(l) for l in second}
+    if reader is not None and hasattr(reader, "read_ahead"):
+        try:                                   # all the lines at once, several at a time
+            reader.read_ahead([_crop(rgb, l["bbox"], zoom) for l in second], cancelled=cancelled)
+        except Exception:
+            pass                               # read one by one below
     for l in result:
         if cancelled and cancelled():
             raise RuntimeError("Lettura annullata.")
-        # handwriting, and any ink nobody read (the OCR may miss print on a poor photo)
-        if l["kind"] == "hand" or (l["source"] == "unread" and reader is not None):
+        if id(l) in ids:
             _second_opinion(l, _crop(rgb, l["bbox"], zoom), zoom, reader, lexicon, prefer)
         l["raw"] = tidy(l["raw"])
         text, learned = learning.apply(l["raw"])
@@ -593,8 +601,11 @@ def _second_opinion(line, crop, zoom, reader, lexicon, prefer):
             readings = [reader.read(crop)]
             # as many letters as the ink is long: a reading of another length is the model
             # making things up (it does that on smudges, ruled lines, drawings)
-            clean = reader.clean(crop) if hasattr(reader, "clean") else crop
-            aspect = clean.shape[1] / max(clean.shape[0], 1)
+            if hasattr(reader, "aspect"):
+                aspect = reader.aspect(crop)          # measured when the line was read
+            else:
+                clean = reader.clean(crop) if hasattr(reader, "clean") else crop
+                aspect = clean.shape[1] / max(clean.shape[0], 1)
             def plausible(t):
                 if not t or not 0.5 <= len(t) / max(aspect, 0.5) <= 4.5:
                     return False

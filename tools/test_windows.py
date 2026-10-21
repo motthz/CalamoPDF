@@ -35,7 +35,8 @@ def test_ocr():
         print(f"   [{l['kind']}] {l['source']} doubt={l['doubt']}: {l['text']}")
     hand = [l for l in res["ink"] if l["kind"] == "hand"]
     check("handwriting lines found", len(hand) >= 2, f"{len(hand)} lines")
-    check("glyphs learned", len(res["hand"]["glyphs"]) >= 5, f"{len(res['hand']['glyphs'])} glyphs")
+    learned = s.learn_page(0)                   # the letters are learned after the text is shown
+    check("glyphs learned", len(learned["hand"]["glyphs"]) >= 5, f"{len(learned['hand']['glyphs'])} glyphs")
     # mark the letters of a line by hand and rewrite it with digits
     if hand:
         L = s.ink_letters(0, hand[0]["id"])
@@ -259,6 +260,44 @@ def test_handreader():
     oc, mc = float(np.mean(ocr_cer)), float(np.mean(model_cer))
     check("reader: reads handwriting well", mc < 0.25, f"errore lettore {mc:.2f}, OCR Windows {oc:.2f}")
     check("reader: reasonably fast", float(np.median(times)) < 3.0, f"{np.median(times):.2f} s per riga")
+
+
+def test_reader_speed():
+    """How many lines a second the reader reads on this computer: the encoder of the first
+    download, read one by one (1.6), against the fast encoder read several at a time (1.7)."""
+    import numpy as np
+    from engine.handreader import HandReader, READER
+    if not READER.installed():
+        print("SKIP reader speed: no model")
+        return
+    try:
+        READER.download_fast()
+    except Exception as e:
+        print("   fast reader not downloaded:", e)
+    texts = ["Consegna entro venerdi", "Firmato Giulia Rossi", "Ottimo lavoro del team", "Visto e approvato",
+             "Marco Bianchi", "Riunione del 12 maggio", "Chiamare il fornitore domani", "Pagato in contanti"]
+    imgs = [np.asarray(_line_image(t, f, size, (25, 40, 140))) for t in texts
+            for f in ("Inkfree.ttf", "segoesc.ttf") for size in (50, 58)]
+
+    def run(fast, ahead):
+        r = HandReader()
+        r.use_fast = fast
+        r.read(imgs[0])                            # opening the model is not reading
+        r._seen.clear()
+        t = time.time()
+        if ahead:
+            r.read_ahead(imgs)
+        out = [r.read(im)[0] for im in imgs]
+        return (time.time() - t) / len(imgs), out
+    old, out_old = run(False, False)
+    new, out_new = run(READER.fast_installed(), True)
+    texts_all = [t for t in texts for _ in range(4)]
+    e_old = float(np.mean([_cer(a, b) for a, b in zip(out_old, texts_all)]))
+    e_new = float(np.mean([_cer(a, b) for a, b in zip(out_new, texts_all)]))
+    print(f"   1.6: {old:.3f} s/riga (errore {e_old:.2f})   1.7: {new:.3f} s/riga (errore {e_new:.2f})"
+          f"   veloce scaricato: {READER.fast_installed()}   -{(1 - new / old) * 100:.0f}% di tempo")
+    check("reader speed: faster than 1.6", new < old, f"{old:.3f} -> {new:.3f} s per riga")
+    check("reader speed: as accurate", e_new <= e_old + 0.05, f"errore {e_old:.2f} -> {e_new:.2f}")
 
 
 def test_reader_in_analysis():
@@ -839,7 +878,7 @@ def test_release_check():
 
 
 if __name__ == "__main__":
-    for t in (test_ocr, test_writings, test_skewed_scan, test_handreader, test_reader_in_analysis, test_table_form, test_rewrite_keeps_background, test_remove_and_mark,
+    for t in (test_ocr, test_writings, test_skewed_scan, test_handreader, test_reader_speed, test_reader_in_analysis, test_table_form, test_rewrite_keeps_background, test_remove_and_mark,
               test_rotated_page_edit, test_editing, test_more, test_graphics, test_real_services, test_export_scan, test_print_now, test_portable_swap,
               test_setup_script, test_release_check):
         try:

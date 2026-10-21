@@ -32,7 +32,7 @@ from engine.ocr import available_languages  # noqa: E402
 from engine.storage import load_json, save_json  # noqa: E402
 import updater  # noqa: E402
 
-VERSION = "1.6.0"
+VERSION = "1.7.0"
 
 _user32 = ctypes.windll.user32
 _user32.FindWindowW.restype = wintypes.HWND
@@ -65,7 +65,7 @@ UNLOCKED = {"tabs", "dirty_tabs", "boot", "check_update", "download_update", "pr
             "open_release_page", "install_pending_update", "set_settings", "minimize", "toggle_maximize", "close",
             "analyze", "mark_ink", "cancel_analysis", "model_status", "model_download", "open_url", "reveal",
             "languages_translate", "translate_doc", "log_error", "print_now", "printer",
-            "export_docx", "export_xlsx", "export_other", "image_base"}
+            "export_docx", "export_xlsx", "export_other", "image_base", "learn_page"}
 
 
 def safe(fn):
@@ -108,6 +108,9 @@ class Api:
         # the dictionary takes a moment to load: do it now, not on the first page read
         from engine.lexicon import LEXICON
         threading.Thread(target=LEXICON._load, daemon=True).start()
+        # an installation from before 1.7: the fast reader comes in the background
+        if self._settings.get("handModel", True) and READER.installed() and not READER.fast_installed():
+            threading.Thread(target=self._fetch_fast, daemon=True).start()
         self.startup_path = next((a for a in sys.argv[1:] if a.lower().endswith(".pdf") and os.path.exists(a)), None)
 
     # ---------------------------------------------------------------- tabs
@@ -1069,6 +1072,17 @@ class Api:
         return self._s.analyze(index, self._settings.get("ocrLang") or None, reader=self._reader(),
                                cancelled=lambda: gen != self._cancel_gen)
 
+    @staticmethod
+    def _fetch_fast():
+        try:
+            READER.download_fast()
+        except Exception:
+            traceback.print_exc()             # tried again at the next start
+
+    @safe
+    def learn_page(self, index):
+        return self._s.learn_page(index)
+
     @safe
     def remove_ink(self, index, line_id):
         return self._s.remove_ink(index, line_id)
@@ -1271,7 +1285,8 @@ def selftest(pdf, out):
     res = s.analyze(0, reader=reader)
     report["ink"] = [l["text"] for l in res["ink"]]
     report["sources"] = [l["source"] for l in res["ink"]]
-    report["glyphs"] = len(res["hand"]["glyphs"])
+    report["glyphs"] = len(s.learn_page(0)["hand"]["glyphs"])      # the letters: learned after the text
+    report["fastReader"] = READER.fast_installed()
     if res["ink"]:
         s.edit_ink(0, res["ink"][-1]["id"], "Calamo")
     tmp = tempfile.mkdtemp()
