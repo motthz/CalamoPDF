@@ -1,7 +1,7 @@
 ; Inno Setup script for Calamo PDF Studio
 #define AppName "Calamo PDF Studio"
 #ifndef AppVersion
-  #define AppVersion "1.7.0"
+  #define AppVersion "1.7.1"
 #endif
 #define AppExe "CalamoPDF.exe"
 
