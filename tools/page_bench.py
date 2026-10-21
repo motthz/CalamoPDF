@@ -65,7 +65,24 @@ def run(app, out, pages=2):
     import pymupdf as fitz
     from engine.document import Session
     from engine.handreader import READER
+    import engine.ocr as ocr
     READER._load()
+    spent = {"ocr": 0.0, "reader": 0.0}
+
+    def timed(obj, name, key):                 # where the time goes: Windows OCR, the reader
+        f = getattr(obj, name)
+
+        def g(*a, **k):
+            t = time.perf_counter()
+            try:
+                return f(*a, **k)
+            finally:
+                spent[key] += time.perf_counter() - t
+        setattr(obj, name, g)
+    timed(ocr, "windows_ocr", "ocr")
+    for name in ("read_ahead", "read"):
+        if hasattr(READER, name):
+            timed(READER, name, "reader")
     res = []
     for seed in range(pages):
         doc = fitz.open()
@@ -75,6 +92,7 @@ def run(app, out, pages=2):
         doc.save(path)
         s = Session()
         s.open(path)
+        spent.update(ocr=0.0, reader=0.0)
         t = time.perf_counter()
         r = s.analyze(0, reader=READER)
         text = time.perf_counter() - t
@@ -84,8 +102,10 @@ def run(app, out, pages=2):
             s.learn_page(0)
             learn = time.perf_counter() - t
         lines = sum(1 for l in r["ink"] if l["source"] != "unread")
-        print(f"   pagina {seed + 1}: testo {text:.1f} s, calligrafia {learn:.1f} s, {lines} righe lette", flush=True)
-        res.append({"text": text, "learn": learn, "lines": lines})
+        print(f"   pagina {seed + 1}: testo {text:.1f} s (OCR di Windows {spent['ocr']:.1f}, lettore a mano "
+              f"{spent['reader']:.1f}, resto {text - spent['ocr'] - spent['reader']:.1f}), calligrafia {learn:.1f} s, "
+              f"{lines} righe lette", flush=True)
+        res.append({"text": text, "learn": learn, "lines": lines, **spent})
     with open(out, "w") as f:
         json.dump(res, f)
 
