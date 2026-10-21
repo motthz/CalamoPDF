@@ -37,6 +37,17 @@ jobs:
           CALAMO_MODEL_DIR: ${{ runner.temp }}/calamo-model
         run: python tools/reader_bench.py
 
+      - name: A page of handwriting, 1.6.0 against this version (same computer)
+        shell: pwsh
+        env:
+          CALAMO_MODEL_DIR: ${{ runner.temp }}/calamo-model
+        run: |
+          git fetch --depth 1 origin tag v1.6.0
+          git worktree add "$env:RUNNER_TEMP/v160" v1.6.0
+          python tools/page_bench.py --app "$env:RUNNER_TEMP/v160/app" --out "$env:RUNNER_TEMP/old.json"
+          python tools/page_bench.py --out "$env:RUNNER_TEMP/new.json"
+          python tools/page_bench.py --compare "$env:RUNNER_TEMP/old.json" "$env:RUNNER_TEMP/new.json"
+
       - name: PDF tools tests (forms, pages, PDF/A, signatures, export, many files)
         run: python tools/test_pdftools.py
 

@@ -72,7 +72,7 @@ class HandReader:
             self._lanes = []
             self.error = None
             d = model_dir()
-            for name, _ in FILES + [FAST]:
+            for name, _ in FILES + [FAST, ("scelta-codificatore.json", [])]:
                 for f in (name, name + ".part", name + ".new"):
                     try:
                         os.remove(os.path.join(d, f))
@@ -81,6 +81,13 @@ class HandReader:
 
     def fast_installed(self):
         return os.path.exists(os.path.join(model_dir(), FAST[0]))
+
+    def prepare(self):
+        """In the background at start: the fast encoder downloaded if missing, and measured
+        against the other one on this computer, so the first reading does not wait for it."""
+        self.download_fast()
+        import onnxruntime as ort
+        self._fast_wins(ort, model_dir())
 
     def download_fast(self, progress=None):
         """Fetch the fast encoder and check it opens; a reading in progress keeps the one it
@@ -179,9 +186,9 @@ class HandReader:
             import onnxruntime as ort
             from tokenizers import Tokenizer
             d = model_dir()
-            # the fast encoder when it is there (see FAST): the same network with the operations
-            # of each layer fused and quantized per channel; else the one of the first download
-            fast = self.use_fast and os.path.exists(os.path.join(d, FAST[0]))
+            # the fast encoder when it is there (see FAST) and when it is really faster on
+            # this computer: on some processors the encoder of the first download already is
+            fast = self.use_fast and os.path.exists(os.path.join(d, FAST[0])) and self._fast_wins(ort, d)
             enc = FAST[0] if fast else "encoder.onnx"
             # two readers side by side, with half of the cores each, read more lines in the
             # same time than one with all of them (the model does not use many cores well)
@@ -222,6 +229,45 @@ class HandReader:
             self._dec_inputs = {i.name: i for i in self._dec.get_inputs()}
             self._logits = [self._dec.get_outputs()[0].name]
             self._enc_in = self._enc.get_inputs()[0].name
+
+    @staticmethod
+    def _fast_wins(ort, d):
+        """Is the fast encoder faster than the one of the first download on this computer?
+        Measured once (a second or two) and remembered with the processor and the version
+        of onnxruntime; a new processor or onnxruntime measures again."""
+        import platform
+        what = f"{platform.processor()}|{os.cpu_count()}|{ort.__version__}"
+        memo = os.path.join(d, "scelta-codificatore.json")
+        try:
+            with open(memo, encoding="utf-8") as f:
+                m = json.load(f)
+            if m.get("what") == what:
+                return bool(m.get("fast"))
+        except Exception:
+            pass
+        times = {}
+        try:
+            x = np.random.default_rng(0).random((1, 3, 384, 384), np.float32)
+            import time
+            for name in ("encoder.onnx", FAST[0]):
+                o = ort.SessionOptions()
+                o.intra_op_num_threads = max(1, os.cpu_count() or 2)
+                s = ort.InferenceSession(os.path.join(d, name), o, providers=["CPUExecutionProvider"])
+                for _ in range(2):
+                    s.run(None, {"pixel_values": x})
+                t = time.perf_counter()
+                for _ in range(5):
+                    s.run(None, {"pixel_values": x})
+                times[name] = time.perf_counter() - t
+            fast = times[FAST[0]] < times["encoder.onnx"] * 0.95       # clearly faster, or not worth it
+        except Exception:
+            return False
+        try:
+            with open(memo, "w", encoding="utf-8") as f:
+                json.dump({"what": what, "fast": fast, "seconds": times}, f)
+        except OSError:
+            pass
+        return fast
 
     @staticmethod
     def clean(rgb):
