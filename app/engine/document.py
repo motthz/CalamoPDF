@@ -6,7 +6,6 @@ import io
 import difflib
 import os
 import re
-import threading
 
 import pymupdf as fitz
 import numpy as np
@@ -19,6 +18,7 @@ from .lexicon import LEXICON, WORD_RE
 from .editing import EditingMixin
 from .extras import ExtrasMixin
 from .graphics import GraphicsMixin, tag_image
+from .sync import PDF_LOCK
 from .pdftools import PdfToolsMixin
 from .ocr import PRINT_BELOW, Learning, prepare_page, read_page, read_region
 from .storage import gc
@@ -198,7 +198,7 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin, PdfToolsMixin):
     MAX_UNDO_BYTES = 400 * 1024 * 1024
 
     def __init__(self):
-        self.lock = threading.RLock()
+        self.lock = PDF_LOCK          # shared by all documents: see sync.py
         self.doc = None
         self.path = None
         self.dirty = False
@@ -398,6 +398,10 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin, PdfToolsMixin):
                 # a scan or a photo travels as JPEG (a fifth of the PNG); text and drawings
                 # stay PNG, sharp at every zoom
                 fmt = "jpeg" if self._is_scan(page) else "png"
+            # at most ~12 megapixels a page: a huge zoom would otherwise send images of tens
+            # of megabytes to the window, which then stutters or runs out of memory
+            r = page.rect
+            scale = min(float(scale), (12e6 / max(r.width * r.height, 1)) ** 0.5)
             pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False, annots=True)
             data = pix.tobytes("jpeg", jpg_quality=88) if fmt == "jpeg" else pix.tobytes("png")
             mime = "image/jpeg" if fmt == "jpeg" else "image/png"

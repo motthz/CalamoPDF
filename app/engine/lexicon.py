@@ -27,6 +27,16 @@ for _p, _q in MERGES:
     _MERGE_END.setdefault((_p[-1], _q[-1]), []).append((_p, _q))
 
 
+# common English words found in the Italian word list (it is made from subtitles): the
+# handwriting reader, trained on English, makes them up on Italian lines that it cannot
+# read ("A little", "at the house"), so they must not count as Italian
+ENGLISH = set("""the and of to at house were suit little is it this that with for you be on my we they she
+his her was are have has had from by an as not but what if out up about into than them can only other new
+some could time these two may then first any like now over such our also after where know get through back
+much go good well way even because here why how when which there their would been one who will said each
+make made many very your its just see him yes us thing things right think going want got really""".split())
+
+
 class Lexicon:
     def __init__(self, path=DATA):
         self._path = path
@@ -88,6 +98,8 @@ class Lexicon:
     def known(self, word):
         self._load()
         w = word.lower()
+        if w in ENGLISH:
+            return False          # in the word list (it comes from films' subtitles), but not Italian
         return w in self.freq or not w.isalpha()
 
     def ratio(self, text):

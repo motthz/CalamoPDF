@@ -44,11 +44,11 @@
 | ✒️ **Firma e immagini** | Disegna la firma o prendila da una foto (lo sfondo viene tolto), inserisci immagini; sposta, ridimensiona, ritaglia e sostituisci. |
 | ⬛ **Oscuramento sicuro** | Il testo sotto il riquadro nero viene eliminato davvero; ricerca automatica di codici fiscali, IBAN, email, telefoni, carte e nomi. |
 | 🧾 **Documento** | Intestazione, piè di pagina, numeri di pagina, filigrana e numerazione Bates; proprietà (titolo, autore, lingua); confronto con un'altra versione; copia leggera; bianco e nero; copia protetta da password o senza password. |
-| 🖨️ **Stampa** | Ctrl+P apre la finestra di stampa di Windows con l'anteprima delle pagine. |
+| 🖨️ **Stampa** | Il pulsante della stampa offre tre scelte: *Stampa…* (Ctrl+P) con la finestra delle impostazioni e l'anteprima, *Stampa tutto subito* e *Stampa questa pagina subito* sulla stampante predefinita, senza finestre. |
 | 📦 **Più file insieme** | Comprimi, numera, metti la filigrana, ruota, proteggi o togli la password, converti in PDF/A, appiattisci o ripara tanti PDF in un colpo. |
 | 🩹 **Ripara** | Recupera i PDF danneggiati, pagina per pagina. |
 | 🔄 **Aggiornamenti automatici** | Quando su GitHub esce una nuova versione, Calamo la scarica in background e la installa alla chiusura. |
-| 📄 **Esporta in Word ed Excel** | `.docx` con stili, immagini, tabelle e testo scritto a mano; `.xlsx` con le tabelle in fogli formattati (numeri e percentuali riconosciuti). |
+| 📄 **Esporta in Word ed Excel** | `.docx` con stili, immagini, tabelle e testo scritto a mano; `.xlsx` con le tabelle in fogli formattati (numeri e percentuali riconosciuti). Le pagine scansionate vengono lette prima di esportarle: il testo diventa testo, le tabelle (anche disegnate a mano) tabelle vere, timbri e loghi immagini a parte; mai la pagina intera come un'unica immagine. |
 | 🧰 **Tutto il resto** | Aggiungi testo, gomma per aree, trova e sostituisci, annulla/ripeti illimitato, ruota/inserisci/elimina pagine, tema scuro e chiaro, trascina e rilascia. |
 
 <p align="center"><img src="docs/welcome.png" alt="Schermata iniziale" width="700"></p>
@@ -75,7 +75,7 @@ Requisiti: Windows 10/11 a 64 bit con WebView2 (già presente su Windows 11). Pe
 | Compila | `C` | Scrivi nei campi del modulo direttamente sulla pagina; *Riconosci i campi* li crea se il modulo è pensato per la carta. |
 | Firma | `F` | Clicca dove mettere la firma (o un'immagine). La prima volta disegnala o prendila da una foto. Con *Digitale* trascina il riquadro della firma con certificato. |
 | Oscura | `X` | Trascina sull'area da oscurare per sempre. |
-| Oggetti | `O` | Prendi e trascina testi, scritte, tabelle, disegni, firme, immagini, campi, note e forme; ridimensiona dall'angolo, `Canc` per eliminare; doppio clic su una nota per riscriverla. |
+| Oggetti | `O` | Prendi e trascina testi, scritte, tabelle, disegni, firme, immagini, campi, note e forme; ridimensiona dalla maniglia nell'angolo (anche testi, scritte e tabelle), `Canc` per eliminare; doppio clic su una nota per riscriverla. Una tabella con elementi dentro si prende dal bordo: ciò che contiene resta da prendere uno per uno. |
 | Collegamenti | `L` | Trascina un riquadro sul testo e scegli un sito web o una pagina. |
 | Ritaglia | `K` | Trascina il riquadro da tenere: il resto della pagina viene tagliato (questa pagina o tutte). |
 | Crea campi | `Q` | Scegli il tipo di campo e trascina un riquadro sulla pagina. |

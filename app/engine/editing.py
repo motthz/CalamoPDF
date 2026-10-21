@@ -273,7 +273,8 @@ class EditingMixin:
         img = Image.open(io.BytesIO(png))
         if page.rotation:               # the stamp is drawn in the page's own orientation
             img = img.rotate(page.rotation, expand=True)
-        a = page.add_stamp_annot(self._text_rect(page, rect), stamp=_png(img))
+        from .graphics import _fresh
+        a = page.add_stamp_annot(self._text_rect(page, rect), stamp=_fresh(_png(img)))
         a.set_info(subject=tag, content=content, title="Calamo")
         a.update()
         return a

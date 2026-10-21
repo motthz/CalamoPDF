@@ -135,7 +135,14 @@
     <div class="tb-group">
       <button class="tb-btn" data-cmd="open" data-tip="Apri un PDF  Ctrl+O"><svg><use href="#i-open"/></svg></button>
       <button class="tb-btn" data-cmd="save" data-tip="Salva  Ctrl+S" data-need-doc><svg><use href="#i-save"/></svg></button>
-      <button class="tb-btn" data-cmd="print" data-tip="Stampa  Ctrl+P" data-need-doc><svg><use href="#i-print"/></svg></button>
+      <div class="menu-wrap">
+        <button class="tb-btn" data-cmd="printMenu" id="btnPrint" data-tip="Stampa: con le impostazioni, oppure subito" data-need-doc><svg><use href="#i-print"/></svg></button>
+        <div class="menu" id="printMenu" hidden>
+          <button data-cmd="print"><svg><use href="#i-print"/></svg><div><b>Stampa…</b><small>Scegli stampante, pagine e impostazioni</small></div></button>
+          <button data-cmd="printAllNow"><svg><use href="#i-print"/></svg><div><b>Stampa tutto subito</b><small id="printAllInfo">Tutto il documento sulla stampante predefinita</small></div></button>
+          <button data-cmd="printPageNow"><svg><use href="#i-print"/></svg><div><b>Stampa questa pagina subito</b><small id="printPageInfo">Solo la pagina corrente</small></div></button>
+        </div>
+      </div>
       <span class="tb-sep"></span>
       <button class="tb-btn" data-cmd="undo" id="btnUndo" data-tip="Annulla  Ctrl+Z" data-need-doc><svg><use href="#i-undo"/></svg></button>
       <button class="tb-btn" data-cmd="redo" id="btnRedo" data-tip="Ripeti  Ctrl+Y" data-need-doc><svg><use href="#i-redo"/></svg></button>
@@ -152,7 +159,7 @@
       <div class="tool-more menu-wrap" id="toolMore">
         <button class="more-btn" id="toolMoreBtn" data-tip="Altri strumenti: gomma, oggetti, oscura, link, ritaglia, campi"><svg id="toolMoreIcon"><use href="#i-dots"/></svg><span id="toolMoreLabel">Altro</span><svg class="chev"><use href="#i-chev-down"/></svg></button>
         <div class="menu tool-menu" id="toolMenu" hidden>
-          <button data-tool="select"><svg><use href="#i-move"/></svg><div><b>Oggetti</b><small>Sposta e ridimensiona firme, immagini, note</small></div><kbd>O</kbd></button>
+          <button data-tool="select"><svg><use href="#i-move"/></svg><div><b>Oggetti</b><small>Sposta e ridimensiona ogni elemento della pagina</small></div><kbd>O</kbd></button>
           <button data-tool="erase"><svg><use href="#i-eraser"/></svg><div><b>Gomma</b><small>Cancella un'area della pagina</small></div><kbd>E</kbd></button>
           <button data-tool="redact"><svg><use href="#i-redact"/></svg><div><b>Oscura</b><small>Elimina per sempre testo riservato</small></div><kbd>X</kbd></button>
           <div class="menu-sep"></div>

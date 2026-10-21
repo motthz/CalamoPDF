@@ -66,9 +66,24 @@ function toast(msg, kind = "", action) {
   const close = () => { el.classList.add("out"); setTimeout(() => el.remove(), 260); };
   setTimeout(close, action ? 7000 : kind === "err" ? 6000 : 3400);
 }
+// errors of the interface: kept in the log, and said once, never a silent stop
+let lastUiError = "";
+function uiError(msg) {
+  msg = String(msg || "errore sconosciuto");
+  try { window.pywebview && window.pywebview.api.log_error(msg); } catch (e) { /* no bridge yet */ }
+  if (msg === lastUiError) return;
+  lastUiError = msg;
+  setTimeout(() => { if (lastUiError === msg) lastUiError = ""; }, 4000);
+  if (typeof toast === "function") toast("Si è verificato un errore: " + msg.split("\n")[0], "err");
+}
+window.addEventListener("error", e => uiError((e.error && e.error.stack) || e.message));
+window.addEventListener("unhandledrejection", e => uiError((e.reason && (e.reason.stack || e.reason.message)) || e.reason));
+// the busy layer stays while any of the operations that asked for it is still running
+let busyCount = 0;
 function busy(text, frac) {
   const b = $("#busy");
-  if (text === false) { b.hidden = true; return; }
+  if (text === false) { busyCount = Math.max(0, busyCount - 1); if (!busyCount) b.hidden = true; return; }
+  if (frac == null) busyCount++;            // a progress update is not a new operation
   b.hidden = false;
   $("#busyText").textContent = text;
   $("#busyBar").style.width = frac == null ? "0" : Math.round(frac * 100) + "%";
@@ -227,12 +242,24 @@ async function afterChange(info) {
 }
 
 // ---------------------------------------------------------------- pages
-let pageObserver, thumbObserver;
+let pageObserver, thumbObserver, farObserver;
+// a page far from the screen gives back the memory of its picture (it is drawn again when it
+// comes back): scrolling a long document would otherwise keep hundreds of big images
+function unloadPage(P) {
+  if (!P || P.visible || !P.img.getAttribute("src")) return;
+  P.img.removeAttribute("src");
+  P.renderKey = null;
+  if (!$(".shimmer", P.el)) P.el.insertAdjacentHTML("afterbegin", '<div class="shimmer"></div>');
+}
 function buildPages() {
   const wrap = $("#pages"), thumbs = $("#thumbs");
   wrap.innerHTML = ""; thumbs.innerHTML = "";
   pageObserver && pageObserver.disconnect();
   thumbObserver && thumbObserver.disconnect();
+  farObserver && farObserver.disconnect();
+  farObserver = new IntersectionObserver(es => es.forEach(e => {
+    if (!e.isIntersecting) unloadPage(S.pages[+e.target.dataset.i]);
+  }), { root: wrap, rootMargin: "3000px 0px" });
   pageObserver = new IntersectionObserver(es => es.forEach(e => {
     const P = S.pages[+e.target.dataset.i];
     if (!P) return;
@@ -261,6 +288,7 @@ function buildPages() {
       renderKey: null, dataV: -1, data: null, visible: false, thumbVisible: false, thumbKey: null, canvas: null };
     bindOverlay(P);
     pageObserver.observe(el);
+    farObserver.observe(el);
     thumbObserver.observe(th);
     return P;
   });
@@ -328,6 +356,7 @@ function drawOverlay(P) {
     d.className = "blk";
     d.dataset.id = b.id;
     Object.assign(d.style, box(b.bbox, s, 2));
+    d.innerHTML = RZ;
     frag.appendChild(d);
   });
   (P.data.ink || []).forEach(l => {
@@ -341,6 +370,7 @@ function drawOverlay(P) {
     Object.assign(d.style, box(l.bbox, s, 3));
     if (unread) d.innerHTML = `<span class="ink-tag unread-tag">?</span>`;
     else if (isDoubt(l)) d.innerHTML = `<span class="ink-tag">?</span>`;
+    if (!unread) d.insertAdjacentHTML("beforeend", RZ);
     frag.appendChild(d);
   });
   S.hits.forEach((h, k) => {
@@ -1396,6 +1426,11 @@ async function save() {
     return info;
   }, "Salvataggio…");
 }
+// scanned pages read on the way (an export reads them first): show what was read
+function pagesRead() {
+  S.pages.forEach(P => { P.dataV = -1; if (P.visible) loadPage(P); });
+  refreshHand();
+}
 async function doExport(kind) {
   $("#exportMenu").hidden = true;
   closeEditor(true);
@@ -1403,6 +1438,7 @@ async function doExport(kind) {
     const r = await call(kind === "docx" ? "export_docx" : "export_xlsx");
     busy(false);
     if (!r) return;
+    pagesRead();
     const extra = kind === "xlsx" ? ` (${r.sheets} fogli)` : "";
     toast(`Esportato “${r.name}”${extra}`, "ok", { label: "Apri", run: () => call("reveal", r.path) });
   } catch (e) { busy(false); toast(e.message, "err"); }
@@ -1484,7 +1520,7 @@ function cmd(name) { const f = COMMANDS[name]; if (f) f(); }
 document.addEventListener("click", e => {
   const b = e.target.closest("[data-cmd]");
   if (b && !b.disabled) { cmd(b.dataset.cmd); return; }
-  if (!e.target.closest(".menu-wrap")) { $("#exportMenu").hidden = true; $("#styleMenu").hidden = true; }
+  if (!e.target.closest(".menu-wrap")) { $("#exportMenu").hidden = true; $("#styleMenu").hidden = true; $("#printMenu").hidden = true; }
 });
 $$("#tools button").forEach(b => b.onclick = () => setTool(b.dataset.tool));
 $$("#tabs button").forEach(b => b.onclick = () => {
@@ -1572,7 +1608,7 @@ document.addEventListener("keydown", e => {
   const tools = { n: "view", m: "edit", t: "text", h: "hand", e: "erase", r: "mark", a: "annotate", f: "insert", x: "redact", o: "select" };
   if (tools[k]) setTool(tools[k]);
   if ((e.key === "Delete" || e.key === "Backspace") && S.sel) { e.preventDefault(); deleteSelected(); }
-  if (e.key === "Escape") { closePop(); $("#exportMenu").hidden = true; }
+  if (e.key === "Escape") { closePop(); $("#exportMenu").hidden = true; $("#printMenu").hidden = true; }
   if (e.key === "PageDown") goToPage(Math.min(S.current + 1, S.pages.length - 1));
   if (e.key === "PageUp") goToPage(Math.max(S.current - 1, 0));
 });

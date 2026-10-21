@@ -27,11 +27,12 @@ from engine import fonts as F  # noqa: E402
 from engine import handwriting as HW  # noqa: E402
 from engine.handreader import READER  # noqa: E402
 from engine.document import Session  # noqa: E402
+from engine.sync import PDF_LOCK  # noqa: E402
 from engine.ocr import available_languages  # noqa: E402
 from engine.storage import load_json, save_json  # noqa: E402
 import updater  # noqa: E402
 
-VERSION = "1.5.1"
+VERSION = "1.5.2"
 
 _user32 = ctypes.windll.user32
 _user32.FindWindowW.restype = wintypes.HWND
@@ -58,9 +59,23 @@ def _dialog_kind(name):
     return {"OPEN": webview.OPEN_DIALOG, "SAVE": webview.SAVE_DIALOG, "FOLDER": webview.FOLDER_DIALOG}[name]
 
 
+# calls that must answer at once (the window, settings, updates) or that do long work
+# without PyMuPDF and take the lock themselves only around it (reading a page, translating)
+UNLOCKED = {"tabs", "dirty_tabs", "boot", "check_update", "download_update", "progress", "restart_to_update",
+            "open_release_page", "install_pending_update", "set_settings", "minimize", "toggle_maximize", "close",
+            "analyze", "mark_ink", "cancel_analysis", "model_status", "model_download", "open_url", "reveal",
+            "languages_translate", "translate_doc", "log_error", "print_now", "printer",
+            "export_docx", "export_xlsx", "export_other"}
+
+
 def safe(fn):
+    lock = fn.__name__ not in UNLOCKED
+
     def wrapper(self, *args):
         try:
+            if lock:
+                with PDF_LOCK:           # PyMuPDF is used by one thread at a time (sync.py)
+                    return {"ok": True, "data": fn(self, *args)}
             return {"ok": True, "data": fn(self, *args)}
         except Exception as e:  # surface every engine error as a toast in the UI
             traceback.print_exc()
@@ -317,7 +332,8 @@ class Api:
     def _on_closing(self):
         if self._closing_ok or not any(t.doc and t.dirty for t in self._tabs):
             return True
-        self._js("app.requestClose()")
+        # not from this (window) thread: it would wait for itself and the window would freeze
+        threading.Thread(target=self._js, args=("app.requestClose()",), daemon=True).start()
         return False
 
     # ---------------------------------------------------------------- files
@@ -582,6 +598,18 @@ class Api:
         return self._s.move_ink(index, line_id, dx, dy)
 
     @safe
+    def resize_graphic(self, index, item, rect):
+        return self._s.resize_graphic(index, item, rect)
+
+    @safe
+    def resize_block(self, index, bbox, rect):
+        return self._s.resize_block(index, bbox, rect)
+
+    @safe
+    def resize_ink(self, index, line_id, rect):
+        return self._s.resize_ink(index, line_id, rect)
+
+    @safe
     def graphics(self, index):
         return self._s.graphics(index)
 
@@ -718,22 +746,41 @@ class Api:
             path += "." + ext
         return path
 
+    def _read_scans(self):
+        """Before exporting: the scanned pages nobody read yet are read now (with the
+        handwriting reader too), so their text is exported as text and not as a picture.
+        Pages with a text layer of their own (a scanner's OCR) are left as they are."""
+        s = self._s
+        with PDF_LOCK:
+            todo = [i for i in range(len(s.doc)) if i not in s.ink and s._is_scan(s.doc[i])
+                    and len(s.doc[i].get_text("text").strip()) < 20]
+        reader, lang = self._reader(), self._settings.get("ocrLang") or None
+        for k, i in enumerate(todo):
+            self._js(f"app.progress({json.dumps('Lettura delle pagine scansionate')}, {k}, {len(todo)})")
+            try:
+                s.analyze(i, lang, reader=reader)
+            except Exception:
+                traceback.print_exc()          # a page that cannot be read is exported as it is
+        return len(todo)
+
     @safe
     def export_docx(self):
         path = self._ask_export_path("docx", "Documento Word")
         if not path:
             return None
-        with self._s.lock:
-            export.to_docx(self._s.doc, self._s.ink, path, self._progress("Esportazione in Word"))
-        return {"path": path, "name": os.path.basename(path)}
+        read = self._read_scans()
+        with PDF_LOCK:
+            export.to_docx(self._s, path, self._progress("Esportazione in Word"))
+        return {"path": path, "name": os.path.basename(path), "read": read}
 
     @safe
     def export_xlsx(self):
         path = self._ask_export_path("xlsx", "Cartella di lavoro Excel")
         if not path:
             return None
-        with self._s.lock:
-            sheets = export.to_xlsx(self._s.doc, self._s.ink, path, self._progress("Esportazione in Excel"))
+        self._read_scans()
+        with PDF_LOCK:
+            sheets = export.to_xlsx(self._s, path, self._progress("Esportazione in Excel"))
         return {"path": path, "name": os.path.basename(path), "sheets": sheets}
 
     # ---------------------------------------------------------------- forms
@@ -860,11 +907,13 @@ class Api:
         path = self._ask_export_path(ext, label)
         if not path:
             return None
-        if kind == "pptx":
-            return self._s.export_pptx(path, self._progress("Esportazione in PowerPoint"))
-        if kind == "html":
-            return self._s.export_html(path)
-        return self._s.export_text(path)
+        self._read_scans()
+        with PDF_LOCK:
+            if kind == "pptx":
+                return self._s.export_pptx(path, self._progress("Esportazione in PowerPoint"))
+            if kind == "html":
+                return self._s.export_html(path)
+            return self._s.export_text(path)
 
     # ---------------------------------------------------------------- digital signatures
     @safe
@@ -1046,6 +1095,31 @@ class Api:
         return True
 
     @safe
+    def printer(self):
+        """The printer the quick print goes to."""
+        from engine import printing
+        return printing.default_printer()
+
+    @safe
+    def print_now(self, pages=None):
+        """Print without any dialog on the default printer: all the pages, or those given."""
+        from engine import printing
+        s = self._s
+        if not s.doc:
+            return None
+        todo = list(range(len(s.doc))) if pages in (None, "all") else [int(p) for p in pages]
+        name = printing.print_pages(s.doc, todo, s.info()["name"], progress=self._progress("Stampa"))
+        return {"printer": name, "pages": len(todo)}
+
+    @safe
+    def log_error(self, text):
+        """An error of the interface, kept in errori.log with the engine's."""
+        f = getattr(_crash_log, "file", None)
+        line = "[interfaccia] " + str(text)[:2000]
+        print(line, file=f or sys.stderr, flush=True)
+        return True
+
+    @safe
     def separate_lines(self, index, ids, kind):
         return self._s.separate_lines(index, ids, kind)
 
@@ -1186,8 +1260,8 @@ def selftest(pdf, out):
     if res["ink"]:
         s.edit_ink(0, res["ink"][-1]["id"], "Calamo")
     tmp = tempfile.mkdtemp()
-    export.to_docx(s.doc, s.ink, os.path.join(tmp, "t.docx"))
-    report["sheets"] = export.to_xlsx(s.doc, s.ink, os.path.join(tmp, "t.xlsx"))
+    export.to_docx(s, os.path.join(tmp, "t.docx"))
+    report["sheets"] = export.to_xlsx(s, os.path.join(tmp, "t.xlsx"))
     s.save(os.path.join(tmp, "t.pdf"))
     # the libraries of 1.5: PowerPoint, PDF/A, digital signature (missing modules show up only in the exe)
     report["pptx"] = s.export_pptx(os.path.join(tmp, "t.pptx"))["slides"]
@@ -1206,6 +1280,24 @@ def selftest(pdf, out):
         json.dump(report, f, ensure_ascii=False, indent=1)
 
 
+def _crash_log():
+    """If the app ever crashes or hangs, what it was doing is written to errori.log in the
+    data folder (Python errors, and the stack of every thread on a hard crash)."""
+    import faulthandler
+    from engine.storage import APP_DIR
+    try:
+        os.makedirs(APP_DIR, exist_ok=True)
+        path = os.path.join(APP_DIR, "errori.log")
+        if os.path.exists(path) and os.path.getsize(path) > 2_000_000:
+            os.replace(path, path + ".old")
+        f = open(path, "a", encoding="utf-8", buffering=1)
+        faulthandler.enable(f, all_threads=True)
+        sys.stderr = f if sys.stderr is None or not sys.stderr.isatty() else sys.stderr
+        _crash_log.file = f
+    except Exception:
+        pass
+
+
 def main():
     if "--selftest" in sys.argv:
         i = sys.argv.index("--selftest")
@@ -1215,6 +1307,7 @@ def main():
             with open(sys.argv[i + 2], "w", encoding="utf-8") as f:
                 f.write(traceback.format_exc())
         return
+    _crash_log()
     api = Api()
     ui = os.path.join(BASE, "ui", "index.html")
     width, height, maximized = 1480, 920, False
