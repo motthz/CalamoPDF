@@ -1,3 +1,12 @@
+## Novità di Calamo PDF Studio 1.7.2
+
+**La scheda grafica legge la scrittura a mano.** Sui computer con una scheda grafica DirectX 12 (anche quella integrata nel processore, presente su quasi tutti i portatili), Calamo può far leggere alla scheda grafica la parte più pesante del lavoro: l'immagine di ogni riga, che è circa tre quarti del tempo del lettore. Il processore intanto scrive il testo delle righe già viste, così le due cose vanno avanti insieme.
+- **Si sceglie da solo**: al primo avvio, in sottofondo, Calamo scarica la versione del lettore per la scheda grafica (87 MB, solo se la scheda c'è), controlla che la scheda dia gli stessi numeri del processore e misura chi dei due è più veloce. La scheda viene usata solo se è chiaramente più rapida (almeno il 30%); altrimenti tutto resta com'era.
+- **Sicuro**: se il driver della scheda grafica dà un errore durante la lettura, Calamo continua con il processore senza perdere nessuna riga.
+- **Sui computer senza scheda grafica non cambia nulla**: misurato su Windows, il processore legge alla stessa velocità di prima (differenza sotto il 2%).
+
+**Dove va il tempo, misurato su Windows.** Leggendo una pagina di modulo compilato a mano, il lettore della scrittura a mano è circa l'85% del tempo; l'OCR di Windows meno di un secondo e il resto di Calamo un secondo e mezzo. Rispetto alla 1.6.0, sugli stessi computer dei test automatici, il testo della pagina compare dal 44% al 68% più in fretta, secondo il processore.
+
 ## Novità di Calamo PDF Studio 1.7.1
 
 **Misurato anche su Windows.** Una pagina di modulo compilato a mano, letta dalla 1.6.0 e da questa versione sullo stesso PC Windows (i test automatici di GitHub, processore AMD):

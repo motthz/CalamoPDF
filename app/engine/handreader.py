@@ -30,6 +30,9 @@ UA = "CalamoPDF-handreader"
 # downloaded after the files above (or in the background by an older installation); a
 # reading without it uses encoder.onnx, as before
 FAST = ("encoder_fast.onnx", ["https://github.com/motthz/CalamoPDF/releases/download/modello-veloce-1/encoder_fast.onnx"])
+# the encoder at full precision, for the graphics card (DirectML): fetched only on a computer
+# that has one, and used only when it reads the same as the processor and clearly faster
+GPU = ("encoder_fp32.onnx", [m + "onnx/encoder_model.onnx" for m in MIRRORS])
 
 
 def model_dir():
@@ -45,6 +48,9 @@ class HandReader:
         self._lanes = []
         self.error = None
         self.use_fast = True             # the fast encoder when downloaded (tests compare both)
+        self.use_gpu = True              # the graphics card when it is faster (tests turn it off)
+        self._gpu = None                 # the encoder on the graphics card, when chosen
+        self._gpu_found = None           # is there a graphics card DirectML can use?
         self._seen = {}                  # line picture -> reading, the most recent 4000
         self._aspects = {}               # line picture -> shape of its cleaned ink
         self._mem = threading.Lock()
@@ -63,16 +69,22 @@ class HandReader:
             return False
 
     def status(self):
-        return {"installed": self.installed(), "runtime": self.runtime_ok(), "error": self.error}
+        return {"installed": self.installed(), "runtime": self.runtime_ok(), "error": self.error,
+                "device": self.device()}
+
+    def device(self):
+        """Where the image part of the reading runs: "gpu" (the graphics card) or "cpu"."""
+        return "gpu" if self._gpu is not None else "cpu"
 
     def remove(self):
         """Deletes the downloaded files (to download them again after an error)."""
         with self._lock:
             self._enc = self._dec = self._tok = None
             self._lanes = []
+            self._gpu = None
             self.error = None
             d = model_dir()
-            for name, _ in FILES + [FAST, ("scelta-codificatore.json", [])]:
+            for name, _ in FILES + [FAST, GPU, ("scelta-codificatore.json", []), ("scelta-scheda.json", [])]:
                 for f in (name, name + ".part", name + ".new"):
                     try:
                         os.remove(os.path.join(d, f))
@@ -84,19 +96,53 @@ class HandReader:
 
     def prepare(self):
         """In the background at start: the fast encoder downloaded if missing, and measured
-        against the other one on this computer, so the first reading does not wait for it."""
-        self.download_fast()
+        against the other one on this computer, so the first reading does not wait for it;
+        on a computer with a graphics card, its encoder too, measured the same way."""
         import onnxruntime as ort
-        self._fast_wins(ort, model_dir())
+        d = model_dir()
+        try:
+            self.download_fast()
+            cpu = FAST[0] if self.use_fast and self._fast_wins(ort, d) else "encoder.onnx"
+        except Exception:
+            cpu = "encoder.onnx"
+        if self.use_gpu and self.gpu_found():
+            self._download_extra(GPU)
+            self._gpu_wins(ort, d, cpu)
+
+    def gpu_found(self):
+        """A graphics card DirectML can use (onnxruntime-directml, Windows 10 and later)."""
+        if self._gpu_found is None:
+            found = False
+            try:
+                import onnxruntime as ort
+                if "DmlExecutionProvider" in ort.get_available_providers():
+                    s = self._gpu_session(ort, os.path.join(model_dir(), "encoder.onnx"))
+                    found = "DmlExecutionProvider" in s.get_providers()
+            except Exception:
+                pass
+            self._gpu_found = found
+        return self._gpu_found
+
+    @staticmethod
+    def _gpu_session(ort, path):
+        o = ort.SessionOptions()
+        o.enable_mem_pattern = False             # what DirectML asks for
+        o.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+        o.log_severity_level = 3                 # no graphics card: no message, the processor reads
+        return ort.InferenceSession(path, o, providers=["DmlExecutionProvider", "CPUExecutionProvider"])
 
     def download_fast(self, progress=None):
         """Fetch the fast encoder and check it opens; a reading in progress keeps the one it
         has, the next ones use the new one. Returns True when it is there."""
-        if self.fast_installed():
+        return self._download_extra(FAST, progress)
+
+    def _download_extra(self, entry, progress=None):
+        name, urls = entry
+        target = os.path.join(model_dir(), name)
+        if os.path.exists(target):
             return True
-        target = os.path.join(model_dir(), FAST[0])
         last = None
-        for url in FAST[1]:
+        for url in urls:
             try:
                 self._fetch(url, target + ".new", lambda f: progress and progress(f))
                 import onnxruntime as ort
@@ -115,7 +161,7 @@ class HandReader:
                     pass
         if last is not None:
             raise RuntimeError(f"Download del lettore veloce non riuscito: {last}")
-        with self._lock:                        # the next reading opens the fast encoder
+        with self._lock:                        # the next reading opens the new encoder
             if self._lanes and not any(l.lock.locked() for l in self._lanes):
                 self._enc = None
                 self._lanes = []
@@ -205,6 +251,14 @@ class HandReader:
                     enc=ort.InferenceSession(os.path.join(d, enc), opts, providers=prov),
                     dec=ort.InferenceSession(os.path.join(d, "decoder.onnx"), opts, providers=prov)))
             self._enc, self._dec = self._lanes[0].enc, self._lanes[0].dec
+            self._gpu = None
+            try:
+                if (self.use_gpu and os.path.exists(os.path.join(d, GPU[0]))
+                        and "DmlExecutionProvider" in ort.get_available_providers() and self._gpu_wins(ort, d, enc)):
+                    self._gpu = types.SimpleNamespace(lock=threading.Lock(),
+                                                      enc=self._gpu_session(ort, os.path.join(d, GPU[0])))
+            except Exception:
+                self._gpu = None                 # the processor reads, as without a graphics card
             self._tok = Tokenizer.from_file(os.path.join(d, "tokenizer.json"))
             cfg = {}
             for name in ("config.json", "generation_config.json"):
@@ -268,6 +322,53 @@ class HandReader:
         except OSError:
             pass
         return fast
+
+    @staticmethod
+    def _gpu_wins(ort, d, cpu_enc):
+        """Is the encoder on the graphics card clearly faster than on the processor, and does
+        it compute the same? Measured once (a few seconds) and remembered with the processor,
+        the version of onnxruntime and the encoder of the processor."""
+        import platform
+        import time
+        what = f"{platform.processor()}|{os.cpu_count()}|{ort.__version__}|{cpu_enc}"
+        memo = os.path.join(d, "scelta-scheda.json")
+        try:
+            with open(memo, encoding="utf-8") as f:
+                m = json.load(f)
+            if m.get("what") == what:
+                return bool(m.get("gpu"))
+        except Exception:
+            pass
+        info = {"what": what, "gpu": False}
+        try:
+            x = np.random.default_rng(0).random((1, 3, 384, 384), np.float32) * 2 - 1
+
+            def timed(s):
+                for _ in range(2):
+                    out = s.run(None, {"pixel_values": x})[0]
+                t = time.perf_counter()
+                for _ in range(5):
+                    s.run(None, {"pixel_values": x})
+                return (time.perf_counter() - t) / 5, out
+            o = ort.SessionOptions()
+            o.intra_op_num_threads = max(1, os.cpu_count() or 2)
+            cpu_s, _ = timed(ort.InferenceSession(os.path.join(d, cpu_enc), o, providers=["CPUExecutionProvider"]))
+            _, ref = timed(ort.InferenceSession(os.path.join(d, GPU[0]), o, providers=["CPUExecutionProvider"]))
+            gpu = HandReader._gpu_session(ort, os.path.join(d, GPU[0]))
+            if "DmlExecutionProvider" in gpu.get_providers():
+                gpu_s, out = timed(gpu)
+                # the same numbers as the processor (a driver that computes wrong is not used)
+                diff = float(np.abs(out - ref).max() / (np.abs(ref).max() + 1e-6))
+                # readers side by side on the processor read about a fifth faster than one
+                info.update(cpu=cpu_s, gpu_s=gpu_s, diff=diff, gpu=diff < 0.02 and gpu_s < 0.7 * 0.8 * cpu_s)
+        except Exception as e:
+            info["error"] = str(e)[:300]
+        try:
+            with open(memo, "w", encoding="utf-8") as f:
+                json.dump(info, f)
+        except OSError:
+            pass
+        return bool(info["gpu"])
 
     @staticmethod
     def clean(rgb):
@@ -425,8 +526,16 @@ class HandReader:
         self._load()
         lane = lane or self._lanes[0]
         px = self._pixels(rgb)
+        hidden, gpu = None, self._gpu
+        if gpu is not None:                      # the image on the graphics card, one at a time,
+            try:                                 # while the other readers write their text
+                with gpu.lock:
+                    hidden = gpu.enc.run(None, {self._enc_in: px})[0]
+            except Exception:
+                self._gpu = None                 # a driver error: the processor from now on
         with lane.lock:
-            hidden = lane.enc.run(None, {self._enc_in: px})[0]
+            if hidden is None:
+                hidden = lane.enc.run(None, {self._enc_in: px})[0]
             return self._decode(lane, hidden, max_tokens)
 
     def _decode(self, lane, hidden, max_tokens):
