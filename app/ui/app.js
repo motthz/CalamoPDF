@@ -63,6 +63,8 @@ function toast(msg, kind = "", action) {
     el.appendChild(b);
   }
   $("#toasts").appendChild(el);
+  const live = $$("#toasts .toast:not(.out)");
+  if (live.length > 3) live[0].classList.add("out"), setTimeout(() => live[0].remove(), 260);
   const close = () => { el.classList.add("out"); setTimeout(() => el.remove(), 260); };
   setTimeout(close, action ? 7000 : kind === "err" ? 6000 : 3400);
 }
@@ -118,6 +120,8 @@ function status(msg) { $("#stMsg").textContent = msg || ""; }
 // ---------------------------------------------------------------- boot
 window.addEventListener("pywebviewready", async () => {
   const b = await call("boot");
+  S.imgBase = await call("image_base").catch(() => null);
+  autoPanel();
   S.settings = b.settings;
   S.fonts = b.fonts;
   applyTheme(S.settings.theme || "dark");
@@ -159,6 +163,22 @@ function setDocUI(has) {
   $$("[data-need-doc]").forEach(el => { el.disabled = !has; });
   $("#tools").classList.toggle("disabled", !has);
   $("#welcome").hidden = has;
+  // without a document the start screen has the whole window: the side panels would be empty
+  document.body.classList.toggle("no-doc", !has);
+}
+// the panel on the right: hidden or shown by the user (remembered), closed by itself on a
+// narrow window until the user opens it
+const PANEL_KEY = "calamo.panel";
+function panelPref() { try { return localStorage.getItem(PANEL_KEY); } catch (e) { return null; } }
+function setPanel(open, remember) {
+  document.body.classList.toggle("panel-closed", !open);
+  $("#btnPanel").classList.toggle("on", open);
+  if (remember) { try { localStorage.setItem(PANEL_KEY, open ? "open" : "closed"); } catch (e) { /* not kept */ } }
+  if (S.autoFit && S.pages && S.pages.length) setTimeout(zoomFit, 0);
+}
+function autoPanel() {
+  const pref = panelPref();
+  setPanel(pref ? pref === "open" : window.innerWidth >= 1200, false);
 }
 
 // ---------------------------------------------------------------- document
@@ -175,7 +195,7 @@ async function openResult(info) {
     busy("Apertura del documento…");
     try { info = await call("open_with_password", info.path, pw); } finally { busy(false); }
   }
-  if (info) loadDoc(info);
+  if (info) { S.pickPanel = true; loadDoc(info); }
 }
 async function openDialog() {
   if (!(await confirmDiscard())) return;
@@ -209,7 +229,14 @@ function loadDoc(info) {
   setCurrent(0);
   refreshHand();
   renderInkList();
-  if (!S.quietLoad) toast(`Aperto “${info.name}”`, "ok");
+  const pick = S.pickPanel;
+  S.pickPanel = false;
+  // the panel that fits the document: reading the writing for a scan, the fields for a
+  // form, the pages otherwise
+  // (only for a document the user opened, and until the user picks a panel: after that,
+  // or after an operation, the panel in use stays)
+  const gen = S.docGen;
+  if (pick && !S.panelChosen) call("looks_scanned").then(scan => { if (gen === S.docGen && typeof showPanel === "function") showPanel(scan ? "hand" : info.forms ? "forms" : "page", true); }).catch(() => {});
 }
 
 function updateInfo(info) {
@@ -247,12 +274,14 @@ let pageObserver, thumbObserver, farObserver;
 // comes back): scrolling a long document would otherwise keep hundreds of big images
 function unloadPage(P) {
   if (!P || P.visible || !P.img.getAttribute("src")) return;
+  release(P.img.getAttribute("src"));
   P.img.removeAttribute("src");
   P.renderKey = null;
   if (!$(".shimmer", P.el)) P.el.insertAdjacentHTML("afterbegin", '<div class="shimmer"></div>');
 }
 function buildPages() {
   const wrap = $("#pages"), thumbs = $("#thumbs");
+  (S.pages || []).forEach(P => { release(P.img.getAttribute("src")); release($("img", P.th).getAttribute("src")); });
   wrap.innerHTML = ""; thumbs.innerHTML = "";
   pageObserver && pageObserver.disconnect();
   thumbObserver && thumbObserver.disconnect();
@@ -308,6 +337,19 @@ function layoutPages() {
 }
 // a page of a document no longer shown (the tab changed while it was loading) is left alone
 const stale = P => S.pages[P.i] !== P;
+// the picture of a page: from the local picture server when there is one (the window
+// takes it in by itself, without passing megabytes of text through the bridge), else
+// through the bridge. Returns an address for an <img>; release() frees the old one.
+async function pageImage(P, ratio, fmt) {
+  if (S.imgBase && S.doc && S.doc.sid) {
+    try {
+      const r = await fetch(`${S.imgBase}?sid=${S.doc.sid}&i=${P.i}&v=${P.v}&s=${ratio.toFixed(3)}&f=${fmt}`);
+      if (r.ok) return URL.createObjectURL(await r.blob());
+    } catch (e) { /* the bridge below */ }
+  }
+  return call("render", P.i, ratio, fmt);
+}
+function release(url) { if (url && url.startsWith("blob:")) URL.revokeObjectURL(url); }
 async function loadPage(P, force) {
   if (stale(P)) return;
   const k = `${P.v}@${S.zoom}`;
@@ -315,11 +357,13 @@ async function loadPage(P, force) {
     P.renderKey = k;
     const ratio = Math.min(Math.max(window.devicePixelRatio || 1, 1) * scale(), 6);
     try {
-      const url = await call("render", P.i, ratio, "auto");
-      if (P.renderKey === k) {
+      const url = await pageImage(P, ratio, "auto");
+      if (P.renderKey !== k) release(url);
+      else {
+        P.img.onload = () => { const sh = $(".shimmer", P.el); sh && sh.remove(); };
+        release(P.img.getAttribute("src"));
         P.img.src = url;
         P.canvas = null;
-        P.img.onload = () => { const sh = $(".shimmer", P.el); sh && sh.remove(); };
       }
     } catch (e) { if (!stale(P)) toast(e.message, "err"); }
   }
@@ -341,8 +385,9 @@ async function loadThumb(P) {
   if (P.thumbKey === k) return;
   P.thumbKey = k;
   try {
-    const url = await call("render", P.i, 164 / P.w * (window.devicePixelRatio || 1), "jpeg");
-    $("img", P.th).src = url;
+    const url = await pageImage(P, 164 / P.w * (window.devicePixelRatio || 1), "jpeg"), im = $("img", P.th);
+    release(im.getAttribute("src"));
+    im.src = url;
   } catch (e) { /* thumbnails are best effort */ }
 }
 function drawOverlay(P) {
@@ -431,6 +476,7 @@ function setZoom(z, anchor) {
   const ax = anchor ? anchor.x : wrap.clientWidth / 2, ay = anchor ? anchor.y : wrap.clientHeight / 2;
   const fx = (wrap.scrollLeft + ax) / old, fy = (wrap.scrollTop + ay) / old;
   S.zoom = z;
+  S.autoFit = false;
   closeEditor(true); closePop();
   layoutPages();
   wrap.scrollLeft = fx * z - ax;
@@ -441,6 +487,7 @@ function zoomFit() {
   const w = $("#pages").clientWidth - 90;
   const maxW = Math.max(...S.pages.map(P => P.w));
   S.zoom = Math.min(2, Math.max(0.3, w / (maxW * PT)));
+  S.autoFit = true;
   layoutPages();
 }
 $("#pages").addEventListener("wheel", e => {
@@ -1445,6 +1492,7 @@ async function doExport(kind) {
 }
 
 const COMMANDS = {
+  togglePanel: () => setPanel(document.body.classList.contains("panel-closed"), true),
   open: openDialog, newDoc,
   save: () => save(),
   saveAs: async () => { $("#exportMenu").hidden = true; await guarded(async () => { const i = await call("save_as"); if (i) { updateInfo(i); toast("Copia salvata", "ok"); } }); },
@@ -1609,6 +1657,7 @@ document.addEventListener("keydown", e => {
   if (tools[k]) setTool(tools[k]);
   if ((e.key === "Delete" || e.key === "Backspace") && S.sel) { e.preventDefault(); deleteSelected(); }
   if (e.key === "Escape") { closePop(); $("#exportMenu").hidden = true; $("#printMenu").hidden = true; }
+  if (e.key === "F6" && S.doc) { e.preventDefault(); cmd("togglePanel"); }
   if (e.key === "PageDown") goToPage(Math.min(S.current + 1, S.pages.length - 1));
   if (e.key === "PageUp") goToPage(Math.max(S.current - 1, 0));
 });
@@ -1624,8 +1673,9 @@ document.addEventListener("mouseover", e => {
     const r = el.getBoundingClientRect(), tip = $("#tip");
     tip.textContent = el.dataset.tip.replace(/  /g, "   ");
     tip.hidden = false;
-    tip.style.top = r.bottom + 8 + "px";
-    tip.style.left = Math.min(r.left + r.width / 2 - tip.offsetWidth / 2, window.innerWidth - tip.offsetWidth - 8) + "px";
+    const below = r.bottom + 8 + tip.offsetHeight < window.innerHeight - 4;
+    tip.style.top = (below ? r.bottom + 8 : r.top - 8 - tip.offsetHeight) + "px";
+    tip.style.left = Math.max(8, Math.min(r.left + r.width / 2 - tip.offsetWidth / 2, window.innerWidth - tip.offsetWidth - 8)) + "px";
   }, 450);
 });
 
@@ -1634,6 +1684,7 @@ document.addEventListener("dragover", e => { e.preventDefault(); if (S.dragPage 
 document.addEventListener("dragleave", e => { if (!e.relatedTarget) document.body.classList.remove("drag-over"); });
 document.addEventListener("drop", e => { e.preventDefault(); document.body.classList.remove("drag-over"); });
 window.addEventListener("resize", debounce(() => { positionEditBar(); positionPop(); }, 50));
+window.addEventListener("resize", debounce(() => { if (S.autoFit && S.pages && S.pages.length) zoomFit(); }, 150));
 
 // ---------------------------------------------------------------- first-run tutorial
 const TOUR = [

@@ -75,6 +75,21 @@ def _to_text(page, rect):
     return fitz.Rect(rect) * page.derotation_matrix
 
 
+def text_width(font, text, size):
+    """font.text_length, from the advance of each character remembered on the font: the
+    same characters come back thousands of times when a whole document is rewritten."""
+    adv = getattr(font, "_calamo_adv", None)
+    if adv is None:
+        adv = font._calamo_adv = {}
+    w = 0.0
+    for c in text:
+        a = adv.get(c)
+        if a is None:
+            a = adv[c] = font.glyph_advance(ord(c))
+        w += a
+    return w * size
+
+
 def _append_words(tw, pos, text, font, size):
     """TextWriter.append without the space characters: each word is placed where it goes
     and the gaps are left empty. Windows fonts draw the space and the no-break space with
@@ -84,7 +99,7 @@ def _append_words(tw, pos, text, font, size):
     for part in re.split(r"( +)", text):
         if part and not part.startswith(" "):
             tw.append((x, y), part, font=font, fontsize=size)
-        x += font.text_length(part, fontsize=size)
+        x += text_width(font, part, size)
     return x
 
 
@@ -264,7 +279,7 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin, PdfToolsMixin):
     def info(self):
         pages = [{"w": p.rect.width, "h": p.rect.height, "v": self.page_versions.get(i, 0)}
                  for i, p in enumerate(self.doc)]
-        return {"path": self.path, "name": os.path.basename(self.path) if self.path else (self.title or "Senza titolo.pdf"),
+        return {"sid": id(self), "path": self.path, "name": os.path.basename(self.path) if self.path else (self.title or "Senza titolo.pdf"),
                 "pages": pages, "dirty": self.dirty, "canUndo": bool(self.undo_stack),
                 "canRedo": bool(self.redo_stack), "analyzed": sorted(self.ink.keys()),
                 "protected": bool(getattr(self, "_password", None)), "forms": bool(self.doc.is_form_pdf)}
@@ -392,6 +407,11 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin, PdfToolsMixin):
 
     # ------------------------------------------------------------------ rendering
     def render(self, index, scale, fmt="png"):
+        mime, data = self.render_bytes(index, scale, fmt)
+        return "data:%s;base64,%s" % (mime, base64.b64encode(data).decode("ascii"))
+
+    def render_bytes(self, index, scale, fmt="png"):
+        """(mime type, image bytes) of a page."""
         with self.lock:
             page = self.doc[index]
             if fmt == "auto":
@@ -404,8 +424,7 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin, PdfToolsMixin):
             scale = min(float(scale), (12e6 / max(r.width * r.height, 1)) ** 0.5)
             pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False, annots=True)
             data = pix.tobytes("jpeg", jpg_quality=88) if fmt == "jpeg" else pix.tobytes("png")
-            mime = "image/jpeg" if fmt == "jpeg" else "image/png"
-            return "data:%s;base64,%s" % (mime, base64.b64encode(data).decode("ascii"))
+            return ("image/jpeg" if fmt == "jpeg" else "image/png"), data
 
     def _background(self, page, rect):
         """Median paper colour in a ring just outside rect."""

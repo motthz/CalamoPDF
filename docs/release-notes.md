@@ -1,3 +1,20 @@
+## Novità di Calamo PDF Studio 1.6.0
+
+**Più veloce.**
+- **Avvio circa 6 volte più rapido**: la versione installata non si scompatta più a ogni apertura (prima estraeva circa 200 MB nella cartella temporanea prima di partire). Misurato su Windows: da 3,6 a 0,6 secondi prima che l'app sia pronta. La versione portabile resta un unico file.
+- **Scorrere e ingrandire le pagine** è più fluido: le immagini delle pagine arrivano alla finestra da un piccolo server interno, raggiungibile solo da questo computer, e il visualizzatore le carica da solo, più di una alla volta. Prima ogni pagina passava come un testo di qualche megabyte che bloccava la finestra finché non era arrivato tutto.
+- **Rileggere una pagina già letta** è circa 3 volte più veloce: le righe già lette non vengono rilette dal lettore della scrittura a mano.
+- **Cerca dati sensibili** su un documento di 500 pagine: da 15 a 7 secondi; quando non trova nulla è circa 13 volte più veloce.
+- **PDF/A**: circa un quinto più veloce sui documenti lunghi.
+
+**Più facile da usare.**
+- **Menu del tasto destro** sulla pagina (modifica, aggiungi testo, evidenzia, firma, sposta, leggi la scrittura, stampa, ruota) e sulle miniature (ruota, duplica, aggiungi una pagina vuota, stampa, elimina). Se hai selezionato del testo, c'è anche *Copia*.
+- **Il pannello a destra si nasconde** con il pulsante in alto a destra o con `F6`, per lasciare tutto lo spazio alla pagina; nelle finestre strette parte già chiuso. Calamo ricorda la tua scelta.
+- **All'apertura compare il pannello adatto**: *Scrittura* per una scansione, *Moduli* per un modulo da compilare, *Pagine* per gli altri documenti. Quando scegli tu un pannello, resta quello.
+- **Schermata iniziale più pulita**, senza i pannelli laterali vuoti.
+- **La pagina si adatta alla finestra** quando la ridimensioni (finché non cambi lo zoom tu).
+- Le linguette del pannello a destra non si sovrappongono più nelle finestre strette, i suggerimenti dei pulsanti non escono più dallo schermo e gli avvisi non si accumulano (al massimo tre, niente più "Aperto …" a ogni documento).
+
 ## Novità di Calamo PDF Studio 1.5.2
 
 **Esportazione vera, anche dalle scansioni.** Word, Excel, PowerPoint, pagina web e testo non mettono più la pagina come un'unica immagine:

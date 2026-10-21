@@ -38,6 +38,7 @@ class HandReader:
         self._lock = threading.Lock()
         self._enc = self._dec = self._tok = None
         self.error = None
+        self._seen = {}                  # line picture -> reading, the most recent 4000
 
     # ------------------------------------------------------------------ installation
     def installed(self):
@@ -130,7 +131,8 @@ class HandReader:
             from tokenizers import Tokenizer
             d = model_dir()
             opts = ort.SessionOptions()
-            opts.intra_op_num_threads = max(1, (os.cpu_count() or 2) - 1)
+            # every core: the reading runs in the background and the window is another process
+            opts.intra_op_num_threads = max(1, os.cpu_count() or 2)
             prov = ["CPUExecutionProvider"]
             self._enc = ort.InferenceSession(os.path.join(d, "encoder.onnx"), opts, providers=prov)
             self._dec = ort.InferenceSession(os.path.join(d, "decoder.onnx"), opts, providers=prov)
@@ -156,6 +158,7 @@ class HandReader:
             self._mean = np.array(pc.get("image_mean", [0.5, 0.5, 0.5]), np.float32)
             self._std = np.array(pc.get("image_std", [0.5, 0.5, 0.5]), np.float32)
             self._dec_inputs = {i.name: i for i in self._dec.get_inputs()}
+            self._logits = [self._dec.get_outputs()[0].name]
 
     @staticmethod
     def clean(rgb):
@@ -230,7 +233,19 @@ class HandReader:
         return x.transpose(2, 0, 1)[None]
 
     def read(self, rgb, max_tokens=48):
-        """Reads one line image (H x W x 3, uint8). Returns (text, confidence 0..1)."""
+        """Reads one line image (H x W x 3, uint8). Returns (text, confidence 0..1).
+        A line already read (the page read again, a writing marked again) is not read twice."""
+        import hashlib
+        rgb = np.ascontiguousarray(rgb)
+        key = hashlib.blake2b(rgb.tobytes(), digest_size=16).hexdigest() + str(rgb.shape) + str(max_tokens)
+        hit = self._seen.get(key)
+        if hit is None:
+            hit = self._seen[key] = self._read(rgb, max_tokens)
+            if len(self._seen) > 4000:
+                self._seen.pop(next(iter(self._seen)))
+        return hit
+
+    def _read(self, rgb, max_tokens):
         self._load()
         hidden = self._enc.run(None, {self._enc.get_inputs()[0].name: self._pixels(rgb)})[0]
         ids, logps = [self._start], []
@@ -249,7 +264,7 @@ class HandReader:
                     shape = [1 if not isinstance(d, int) else d for d in inp.shape]
                     shape[2] = 0 if ".decoder." in name else hidden.shape[1]
                     feeds[name] = np.zeros(shape, dtype=np.float32)
-            logits = self._dec.run(None, feeds)[0][0, -1]
+            logits = self._dec.run(self._logits, feeds)[0][0, -1]     # only the logits are used
             logits = logits - logits.max()
             p = np.exp(logits)
             p /= p.sum()

@@ -723,7 +723,11 @@ class EditingMixin:
                 # lines of text with the box of every character, to map matches to boxes; the
                 # boxes are made only for what matches (a long document has millions of characters)
                 rows = []
-                for b in page.get_text("rawdict")["blocks"]:
+                # the boxes of the characters only on a page where something matches: most
+                # pages of a long document have nothing, and their plain text is quick to read
+                plain = page.get_text("text")
+                blocks = page.get_text("rawdict")["blocks"] if any(rx.search(plain) for _, rx in pats) else []
+                for b in blocks:
                     for line in b.get("lines", []):
                         chars = [c for s in line["spans"] for c in s["chars"]]
                         if chars:
@@ -750,13 +754,17 @@ class EditingMixin:
                             hits.append({"page": i, "bbox": list(r), "text": m.group(), "kind": kind,
                                          "label": SENSITIVE[kind][0] if kind in SENSITIVE else "Testo"})
                 # a match inside a longer one (a "phone number" inside an IBAN) is the same data
-                kept = []
+                # (compared only with the kept ones on the same height: a page can have hundreds)
+                kept, rows_kept = [], {}
                 for h in sorted(hits, key=lambda h: -len(h["text"])):
                     b = h["bbox"]
                     area = (b[2] - b[0]) * (b[3] - b[1])
+                    band = int(b[1] // 24)
+                    near = [o for k in (band - 1, band, band + 1) for o in rows_kept.get(k, ())]
                     if not any(max(0, min(b[2], o[2]) - max(b[0], o[0])) * max(0, min(b[3], o[3]) - max(b[1], o[1])) > area * 0.6
-                               for o in (k["bbox"] for k in kept)):
+                               for o in near):
                         kept.append(h)
+                        rows_kept.setdefault(band, []).append(b)
                 out.extend(sorted(kept, key=lambda h: (h["bbox"][1], h["bbox"][0])))
             return out
 

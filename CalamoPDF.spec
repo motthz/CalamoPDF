@@ -1,5 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
-# PyInstaller build for Calamo PDF Studio (one-file, windowed)
+# PyInstaller build for Calamo PDF Studio (windowed), two forms of the same app:
+# * dist/CalamoPDF.exe: one file, the portable copy (unpacks itself at every start);
+# * dist/CalamoPDF-app/: a folder, what the installer installs: nothing to unpack, so it
+#   starts several seconds sooner.
 from PyInstaller.utils.hooks import collect_submodules, collect_data_files, collect_dynamic_libs
 
 hidden = (collect_submodules("winrt") + collect_submodules("webview.platforms")
@@ -31,3 +34,13 @@ exe = EXE(
     upx=False,
     runtime_tmpdir=None,
 )
+exe_dir = EXE(
+    pyz, a.scripts, [],
+    exclude_binaries=True,
+    name="CalamoPDF",
+    icon="assets/icon.ico",
+    version="version_info.txt",
+    console=False,
+    upx=False,
+)
+COLLECT(exe_dir, a.binaries, a.datas, name="CalamoPDF-app", upx=False)

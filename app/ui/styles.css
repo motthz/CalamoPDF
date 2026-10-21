@@ -959,3 +959,32 @@ textarea.fill-in { resize: none; padding: 2px 3px; }
 .tool-select .blk:hover > .rz, .tool-select .ink:hover > .rz, .tool-select .gfx:hover > .rz { display: block; }
 .rz-ghost { position: absolute; border: 1.5px dashed #2F4C95; border-radius: 3px; background: rgba(47, 76, 149, .06); pointer-events: none; z-index: 6; }
 body.resizing-el, body.resizing-el * { cursor: nwse-resize !important; }
+
+/* the start screen without a document: no empty side panels */
+body.no-doc .workspace { grid-template-columns: minmax(0, 1fr) !important; }
+body.no-doc .sidebar, body.no-doc .inspector { display: none !important; }
+/* the panel on the right, hidden by the user or on a narrow window */
+body.panel-closed .workspace { grid-template-columns: 196px minmax(0, 1fr) 0; }
+body.panel-closed .workspace.side2 { grid-template-columns: 196px 196px minmax(0, 1fr) 0; }
+body.panel-closed .inspector { display: none; }
+@media (max-width: 1250px) {
+  body.panel-closed .workspace { grid-template-columns: 160px minmax(0, 1fr) 0; }
+  body.panel-closed .workspace.side2 { grid-template-columns: 160px 160px minmax(0, 1fr) 0; }
+}
+#btnPanel.on { color: var(--text); background: var(--hover); }
+/* the panel's tabs: whole words, never one over the other */
+#tabs button { min-width: 0; }
+#tabs button span { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; letter-spacing: -.15px; }
+#tabs button { padding-left: 2px; padding-right: 2px; }
+@media (max-width: 1250px) { #tabs button { font-size: 10px; letter-spacing: -.1px; } }
+
+/* the menu of the right mouse button */
+.ctx-menu { position: fixed; z-index: 140; min-width: 230px; padding: 5px; background: var(--glass); border: 1px solid var(--line-2);
+  border-radius: 9px; box-shadow: var(--shadow); animation: pop .1s var(--ease); }
+.ctx-title { padding: 5px 9px 6px; font-size: 11px; font-weight: 600; color: var(--text-3); }
+.ctx-menu button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 9px; border-radius: 6px; color: var(--text); font-size: 12.5px; text-align: left; }
+.ctx-menu button:hover { background: var(--hover); }
+.ctx-menu button svg { width: 15px; height: 15px; color: var(--text-2); flex: none; }
+.ctx-menu button span { flex: 1; }
+.ctx-menu button kbd { font-size: 10.5px; color: var(--text-3); }
+.ctx-menu button.danger, .ctx-menu button.danger svg { color: var(--danger, #e5484d); }

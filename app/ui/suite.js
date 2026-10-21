@@ -77,7 +77,9 @@ setDocUI = function (has) {
 };
 
 // ---------------------------------------------------------------- panels of the right side
-function showPanel(name) {
+function showPanel(name, quiet) {
+  // asked for by the user: the panel opens; chosen by Calamo (quiet): it stays as it is
+  if (!quiet && document.body.classList.contains("panel-closed")) setPanel(true, false);
   if (name === "settings") {
     $$("#tabs button").forEach(x => x.classList.remove("active"));
   } else {
@@ -89,7 +91,7 @@ function showPanel(name) {
   if (name === "doc") loadProps();
   if (name === "security") loadCerts();
 }
-$$("#tabs button").forEach(b => b.onclick = () => showPanel(b.dataset.tab));
+$$("#tabs button").forEach(b => b.onclick = () => { S.panelChosen = true; showPanel(b.dataset.tab); });
 // an element of a panel: the panel opens, the card is shown and lit up
 function focusCard(id) {
   const el = document.getElementById(id);
