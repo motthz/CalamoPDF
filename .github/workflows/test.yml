@@ -44,6 +44,14 @@ jobs:
           pip install onnx sympy
           python tools/encoder_variants.py "$env:RUNNER_TEMP/variants"
 
+      - name: Handwriting model on the graphics card (DirectML)
+        env:
+          CALAMO_MODEL_DIR: ${{ runner.temp }}/calamo-model
+        run: |
+          python -m venv "$env:RUNNER_TEMP/dml"
+          & "$env:RUNNER_TEMP/dml/Scripts/pip" install -q onnxruntime-directml numpy pillow tokenizers
+          & "$env:RUNNER_TEMP/dml/Scripts/python" tools/gpu_bench.py
+
       - name: A page of handwriting, 1.6.0 against this version (same computer)
         shell: pwsh
         env:
