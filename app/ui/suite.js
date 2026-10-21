@@ -772,6 +772,7 @@ async function exportOther(kind, label) {
   await guarded(async () => {
     const r = await call("export_other", kind);
     busy(false);
+    if (r) pagesRead();
     if (r) toast(`Esportato “${r.name}”${r.slides ? ` (${plural(r.slides, "diapositiva", "diapositive")})` : ""}`, "ok", { label: "Apri", run: () => call("reveal", r.path) });
   }, `Esportazione in ${label}…`);
 }
@@ -808,8 +809,32 @@ Object.assign(COMMANDS, {
     await saveMarks(list);
     toast(`Creati ${plural(list.length, "segnalibro", "segnalibri")} dai titoli`, "ok");
   }, "Cerco i titoli…"),
-  print: () => printDoc(),
+  print: () => { $("#printMenu").hidden = true; printDoc(); },
+  printMenu: async () => {
+    const m = $("#printMenu");
+    $("#exportMenu").hidden = true;
+    m.hidden = !m.hidden;
+    if (m.hidden) return;
+    let name = null;
+    try { name = await call("printer"); } catch (e) { /* not on Windows */ }
+    const where = name ? `su «${name}»` : "sulla stampante predefinita";
+    $("#printAllInfo").textContent = `${plural(S.pages.length, "pagina", "pagine")} ${where}`;
+    $("#printPageInfo").textContent = `Pagina ${S.current + 1} ${where}`;
+  },
+  printAllNow: () => printNow(null),
+  printPageNow: () => printNow([Math.max(S.current, 0)]),
 });
+
+// print at once, no dialog: the default printer of Windows
+async function printNow(pages) {
+  $("#printMenu").hidden = true;
+  if (!S.doc) return;
+  closeEditor(true);
+  await guarded(async () => {
+    const r = await call("print_now", pages);
+    if (r) toast(`${plural(r.pages, "pagina inviata", "pagine inviate")} a «${r.printer}»`, "ok");
+  }, "Invio alla stampante…");
+}
 
 // ---------------------------------------------------------------- printing (the system dialog)
 async function printDoc() {

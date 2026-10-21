@@ -20,6 +20,23 @@ def _png(img):
     return buf.getvalue()
 
 
+def _fresh(png):
+    """The same picture with a mark of its own. PyMuPDF reuses a picture already in the
+    document when the same bytes are inserted again, and the one just taken away has been
+    emptied: a moved picture would come back blank."""
+    import uuid
+    from PIL import PngImagePlugin
+    try:
+        img = Image.open(io.BytesIO(png))
+        info = PngImagePlugin.PngInfo()
+        info.add_text("calamo", uuid.uuid4().hex)
+        buf = io.BytesIO()
+        img.save(buf, "PNG", pnginfo=info)
+        return buf.getvalue()
+    except Exception:
+        return png
+
+
 def tag_image(doc, xref, role):
     """Mark a picture Calamo inserted: 'Cover' (rebuilt paper), 'Ink' (lifted or written
     writing), 'Graphic' (a lifted scan graphic). Covers and writing are not objects."""
@@ -69,10 +86,30 @@ def _reach(p):
     return fitz.Rect(r.x0 - e, r.y0 - e, r.x1 + e, r.y1 + e)
 
 
-def _vec(page, dx, dy):
-    """A displacement on screen as a displacement in the page's own coordinates."""
-    m = page.derotation_matrix
-    return fitz.Point(dx, dy) * m - fitz.Point(0, 0) * m
+class _mapping:
+    """Where a point of box goes when box becomes target (displayed coordinates)."""
+
+    def __init__(self, box, target):
+        self.box, self.target = fitz.Rect(box), fitz.Rect(target)
+        self.sx = self.target.width / self.box.width if self.box.width >= 1 else 1.0
+        self.sy = self.target.height / self.box.height if self.box.height >= 1 else 1.0
+        self.k = (abs(self.sx * self.sy)) ** 0.5           # for line widths
+
+    def point(self, p):
+        return fitz.Point(self.target.x0 + (p[0] - self.box.x0) * self.sx, self.target.y0 + (p[1] - self.box.y0) * self.sy)
+
+    def rect(self, r):
+        r = fitz.Rect(r)
+        return fitz.Rect(self.point(r.tl), self.point(r.br)).normalize()
+
+    def unrot_point(self, page, p):
+        """A point in the page's own coordinates, moved (in its own coordinates)."""
+        return self.point(fitz.Point(p) * page.rotation_matrix) * page.derotation_matrix
+
+
+def _map_rect(page, f, r):
+    """A rect in the page's own coordinates, moved by f (displayed coordinates)."""
+    return f.rect(fitz.Rect(r) * page.rotation_matrix) * page.derotation_matrix
 
 
 def _dilate(mask, r):
@@ -262,7 +299,7 @@ class GraphicsMixin:
                 scan = (rgb, zoom, text, [g["bbox"] for g in out], bool(ink))
         if scan is not None:
             try:
-                out += [{"kind": "scan", "bbox": b, "label": "Grafica"} for b in self._scan_parts(*scan)]
+                out += [{"kind": "scan", "bbox": b, "label": label} for b, label in self._scan_parts(*scan)]
             except Exception:
                 pass
         for k, g in enumerate(out):
@@ -288,10 +325,13 @@ class GraphicsMixin:
             x0, y0, x1, y1 = px(r, 2, 2)
             mask[y0:y1, x0:x1] = False
         text = [list(b) for b in text]
+        writing = []
         if not analysed:
-            # not read yet: what looks like lines of text is writing, not a graphic
+            # not read yet: what looks like lines of text is writing, not a graphic; each
+            # line can still be taken and moved by itself, without reading the page first
             try:
-                text += WR.unread_lines(rgb, zoom, text + list(hard))
+                writing = WR.unread_lines(rgb, zoom, text + list(hard))
+                text += writing
             except Exception:
                 pass
         in_text = np.zeros_like(mask)
@@ -321,61 +361,150 @@ class GraphicsMixin:
             if (ink & in_text[y0:y1, x0:x1]).sum() >= total * 0.6 and within_line(x0, y0, x1, y1):
                 continue                                    # writing: a line, not a graphic
             found.append((x0, y0, x1, y1))
-        # what lies inside a bigger graphic (the words of a stamp) is part of it
-        out = []
-        for b in found:
-            if any(o != b and o[0] <= b[0] + 2 and o[1] <= b[1] + 2 and b[2] <= o[2] + 2 and b[3] <= o[3] + 2
-                   for o in found):
-                continue
-            out.append([float(b[0]) / zoom, float(b[1]) / zoom, float(b[2]) / zoom, float(b[3]) / zoom])
+        # what lies inside a bigger graphic (the words of a stamp, a mark in a box) stays an
+        # element of its own too: the outer one is then taken by its edges
+        out = [([float(b[0]) / zoom, float(b[1]) / zoom, float(b[2]) / zoom, float(b[3]) / zoom], "Grafica")
+               for b in found]
+        # a "line" found inside a small drawing (the arc of a stamp) is part of the drawing
+        def holder(b):
+            bx = [v * zoom for v in b]
+            t = 3 * zoom
+            for f in found:
+                if f[0] - t <= bx[0] and f[1] - t <= bx[1] and bx[2] <= f[2] + t and bx[3] <= f[3] + t:
+                    inside = sum(1 for w in writing if f[0] - 2 <= w[0] * zoom and w[2] * zoom <= f[2] + 2
+                                 and f[1] - 2 <= w[1] * zoom and w[3] * zoom <= f[3] + 2)
+                    if inside <= 2:
+                        return True
+            return False
+        out += [([float(v) for v in b], "Scritta") for b in writing if not holder(b)]
         return out
 
     # ------------------------------------------------------------------ moving them
     def move_graphic(self, index, item, dx, dy, checkpoint=True):
         """Drag an element found by graphics(): item = {kind, bbox, xref?} (displayed
         coordinates), dx/dy on screen."""
-        from .document import _overlap
         with self.lock:
-            page = self.doc[index]
+            R = self.doc[index].rect
             box = fitz.Rect(item["bbox"])
-            R = page.rect
             dx = max(min(float(dx), R.x1 - box.x1), R.x0 - box.x0)
             dy = max(min(float(dy), R.y1 - box.y1), R.y0 - box.y0)
             if abs(dx) < 0.5 and abs(dy) < 0.5:
                 return self.blocks(index)
+            return self.resize_graphic(index, item, [box.x0 + dx, box.y0 + dy, box.x1 + dx, box.y1 + dy], checkpoint)
+
+    def resize_graphic(self, index, item, rect, checkpoint=True):
+        """Move and/or resize an element found by graphics() into rect (displayed
+        coordinates): drawings are drawn again stretched (with the text inside, its size
+        following the height), pictures and scan graphics scaled, fields resized."""
+        from .document import _overlap
+        with self.lock:
+            page = self.doc[index]
+            box = fitz.Rect(item["bbox"])
+            target = fitz.Rect(rect) & page.rect
+            if target.width < 2 or target.height < 2:
+                raise RuntimeError("Troppo piccolo.")
             kind = item.get("kind")
             if checkpoint:
                 self._checkpoint(index)
+            f = _mapping(box, target)
             if kind == "vector":
-                self._move_vector(page, index, box, dx, dy)
+                self._move_vector(page, index, box, f)
             elif kind == "image":
-                self._move_image(page, int(item["xref"]), box, dx, dy)
+                self._move_image(page, int(item["xref"]), box, f)
             elif kind == "field":
                 w = next((w for w in page.widgets() if w.xref == int(item["xref"])), None)
                 if w is None:
                     raise RuntimeError("Campo non trovato.")
-                v = _vec(page, dx, dy)
-                w.rect = fitz.Rect(w.rect) + (v.x, v.y, v.x, v.y)
+                w.rect = _map_rect(page, f, fitz.Rect(w.rect))
                 w.update()
             elif kind == "scan":
-                self._move_scan(page, box, dx, dy)
+                self._move_scan(page, box, f)
             else:
                 raise RuntimeError("Elemento sconosciuto.")
             # what Calamo read of the scan inside the element went with it
             for l in self.ink.get(index, []):
                 if _overlap(l["bbox"], list(box)) > 0.8 and kind in ("vector", "scan"):
-                    x0, y0, x1, y1 = l["bbox"]
-                    l["bbox"] = [x0 + dx, y0 + dy, x1 + dx, y1 + dy]
+                    l["bbox"] = list(f.rect(l["bbox"]))
                     for wd in l.get("words") or []:
                         if wd.get("bbox"):
-                            a, b, c, d = wd["bbox"]
-                            wd["bbox"] = [a + dx, b + dy, c + dx, d + dy]
+                            wd["bbox"] = list(f.rect(wd["bbox"]))
             self._touch(index)
             res = self.blocks(index)
-            res["moved"] = [box.x0 + dx, box.y0 + dy, box.x1 + dx, box.y1 + dy]
+            res["moved"] = list(target)
             return res
 
-    def _move_vector(self, page, index, box, dx, dy):
+    # ------------------------------------------------------------------ text and writing, resized
+    def resize_block(self, index, bbox, rect, checkpoint=True):
+        """A block of digital text made bigger or smaller: every piece is written again with
+        its font and colour, its size and position scaled (the proportions are kept)."""
+        from .document import REDACT_KW, _append_words, _to_text, _write_upright
+        from .editing import _shown_rect
+        with self.lock:
+            page = self.doc[index]
+            b, lines = self._raw_block(page, bbox)
+            if not lines:
+                raise RuntimeError("Questo testo non si può ridimensionare (è ruotato).")
+            old = fitz.Rect(_shown_rect(page, b["bbox"]))
+            new = fitz.Rect(rect)
+            k = new.height / max(old.height, 1)
+            if new.height < 3 or k < 0.15:
+                raise RuntimeError("Troppo piccolo.")
+            if checkpoint:
+                self._checkpoint(index)
+            pieces = [sp for l in lines for sp in l["spans"] if sp["text"].strip()]
+            for l in lines:
+                page.add_redact_annot(_to_text(page, self._shrink(l["bbox"])))
+            page.apply_redactions(**REDACT_KW)
+            tws = []
+            for sp in pieces:
+                font = self._font_for(page, sp, sp["text"], {})
+                color = tuple(((sp["color"] >> j) & 255) / 255 for j in (16, 8, 0))
+                tw = fitz.TextWriter(page.rect, color=color)
+                ox, oy = sp["origin"]
+                _append_words(tw, (new.x0 + (ox - old.x0) * k, new.y0 + (oy - old.y0) * k), sp["text"], font, sp["size"] * k)
+                tws.append(tw)
+            for tw in tws:
+                _write_upright(page, tw)
+            self._touch(index)
+            res = self.blocks(index)
+            res["moved"] = [new.x0, new.y0, new.x0 + old.width * k, new.y0 + old.height * k]
+            return res
+
+    def resize_ink(self, index, line_id, rect, checkpoint=True):
+        """A line of a scan made bigger or smaller: its ink is lifted (the paper under it
+        rebuilt) and laid down scaled into rect."""
+        from .document import _image_upright
+        with self.lock:
+            page = self.doc[index]
+            lines = self.ink.get(index, [])
+            if not (0 <= int(line_id) < len(lines)):
+                raise RuntimeError("Riga non trovata.")
+            line = lines[int(line_id)]
+            box = fitz.Rect(line["bbox"])
+            target = fitz.Rect(rect) & page.rect
+            if target.width < 3 or target.height < 3:
+                raise RuntimeError("Troppo piccolo.")
+            png, area = self._lift_ink(page, box)
+            if png is None:
+                raise RuntimeError("Non trovo inchiostro in questa riga.")
+            if checkpoint:
+                self._checkpoint(index)
+            if not self._cover_letters(page, box):
+                self._cover(page, box)
+            f = _mapping(box, target)
+            _image_upright(page, f.rect(area), png)
+            line["bbox"] = list(target)
+            for w in line.get("words") or []:
+                if w.get("bbox"):
+                    w["bbox"] = list(f.rect(w["bbox"]))
+            if line.get("xh"):
+                line["xh"] = line["xh"] * f.sy
+            self._touch(index)
+            res = self.blocks(index)
+            res["moved"] = line["bbox"]
+            return res
+
+    def _move_vector(self, page, index, box, f):
         """The drawings of a group, and the text, pictures and fields inside it."""
         from .document import REDACT_KW, _append_words, _to_text, _write_upright
         own = box * page.derotation_matrix
@@ -394,7 +523,7 @@ class GraphicsMixin:
         red = fitz.Rect(red.x0 - 0.3, red.y0 - 0.3, red.x1 + 0.3, red.y1 + 0.3)
         paths = [p for p in page.get_drawings()
                  if (p.get("fill") is not None or p.get("color") is not None) and _inside(_reach(p), red)]
-        v = _vec(page, dx, dy)
+        P = lambda p: f.unrot_point(page, p)          # noqa: E731  a point of the page, where it goes
         # text wholly inside (a table's cells, the label of a box)
         d = page.get_text("dict", flags=self.TEXT_FLAGS)
         pieces, lines = [], []
@@ -429,15 +558,17 @@ class GraphicsMixin:
             for it in p["items"]:
                 op = it[0]
                 if op == "l":
-                    shape.draw_line(it[1] + v, it[2] + v)
+                    shape.draw_line(P(it[1]), P(it[2]))
                 elif op == "re":
-                    shape.draw_rect(fitz.Rect(it[1]) + (v.x, v.y, v.x, v.y))
+                    r = fitz.Rect(it[1])
+                    shape.draw_rect(fitz.Rect(P(r.tl), P(r.br)).normalize())
                 elif op == "qu":
-                    shape.draw_quad(fitz.Quad([q + v for q in fitz.Quad(it[1])]))
+                    q = fitz.Quad(it[1])
+                    shape.draw_quad(fitz.Quad(P(q.ul), P(q.ur), P(q.ll), P(q.lr)))
                 elif op == "c":
-                    shape.draw_bezier(it[1] + v, it[2] + v, it[3] + v, it[4] + v)
+                    shape.draw_bezier(P(it[1]), P(it[2]), P(it[3]), P(it[4]))
             cap = p.get("lineCap") or 0
-            shape.finish(fill=p.get("fill"), color=p.get("color"), width=p.get("width") or 0,
+            shape.finish(fill=p.get("fill"), color=p.get("color"), width=(p.get("width") or 0) * f.k,
                          lineCap=max(cap) if isinstance(cap, (list, tuple)) else int(cap),
                          lineJoin=int(p.get("lineJoin") or 0), dashes=p.get("dashes") or None,
                          even_odd=bool(p.get("even_odd")), closePath=bool(p.get("closePath")),
@@ -445,22 +576,22 @@ class GraphicsMixin:
                          stroke_opacity=p.get("stroke_opacity") if p.get("stroke_opacity") is not None else 1)
         shape.commit()
         for r, xref, png in pngs:
-            nx = page.insert_image(fitz.Rect(r) + (v.x, v.y, v.x, v.y), stream=png, keep_proportion=False)
+            nx = page.insert_image(_map_rect(page, f, fitz.Rect(r)), stream=_fresh(png), keep_proportion=False)
             tag_image(self.doc, nx, image_role(self.doc, xref) or "Graphic")
         for w in fields:
-            w.rect = fitz.Rect(w.rect) + (v.x, v.y, v.x, v.y)
+            w.rect = _map_rect(page, f, fitz.Rect(w.rect))
             w.update()
         tws = []
         for sp in pieces:
             font = self._font_for(page, sp, sp["text"], {})
             color = tuple(((sp["color"] >> k) & 255) / 255 for k in (16, 8, 0))
             tw = fitz.TextWriter(page.rect, color=color)
-            _append_words(tw, (sp["origin"][0] + dx, sp["origin"][1] + dy), sp["text"], font, sp["size"])
+            _append_words(tw, tuple(f.point(sp["origin"])), sp["text"], font, sp["size"] * min(f.sx, f.sy))
             tws.append(tw)
         for tw in tws:
             _write_upright(page, tw)
 
-    def _move_image(self, page, xref, box, dx, dy):
+    def _move_image(self, page, xref, box, f):
         own = box * page.derotation_matrix
         found = None
         for r, im in self._content_images(page):
@@ -477,11 +608,10 @@ class GraphicsMixin:
         png = self._image_png(xref)
         role = image_role(self.doc, xref)
         page.delete_image(xref)
-        v = _vec(page, dx, dy)
-        nx = page.insert_image(fitz.Rect(r) + (v.x, v.y, v.x, v.y), stream=png, keep_proportion=False)
+        nx = page.insert_image(_map_rect(page, f, fitz.Rect(r)), stream=_fresh(png), keep_proportion=False)
         tag_image(self.doc, nx, role or "Graphic")
 
-    def _move_scan(self, page, box, dx, dy, zoom=3.0):
+    def _move_scan(self, page, box, f, zoom=3.0):
         """Lift a graphic of the scan: the paper is rebuilt under it, and it is laid down
         again, with its own colours and soft edges, dx/dy further on."""
         from .document import _unrot
@@ -541,8 +671,7 @@ class GraphicsMixin:
         # the graphic where it goes, cut to its ink
         ys, xs = np.nonzero(rgba[:, :, 3] > 0)
         ya, yb, xa, xb = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
-        part = fitz.Rect(target.x0 + xa / zoom + dx, target.y0 + ya / zoom + dy,
-                         target.x0 + xb / zoom + dx, target.y0 + yb / zoom + dy)
+        part = f.rect([target.x0 + xa / zoom, target.y0 + ya / zoom, target.x0 + xb / zoom, target.y0 + yb / zoom])
         xref = page.insert_image(_unrot(page, part), stream=_png(Image.fromarray(rgba[ya:yb, xa:xb], "RGBA")),
                                  rotate=page.rotation, overlay=True)
         tag_image(self.doc, xref, "Graphic")

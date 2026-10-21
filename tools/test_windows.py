@@ -728,6 +728,99 @@ def test_real_services():
         print("SKIP voices: no voice installed on this machine")
 
 
+def _scan_form(path, rows=5):
+    """A photographed form: a table drawn slightly slanting, with printed text in its cells."""
+    import io
+    import pymupdf as fitz
+    from PIL import Image, ImageDraw, ImageFont
+    img = Image.new("RGB", (1240, 1754), (238, 235, 226))
+    d = ImageDraw.Draw(img)
+    font = None
+    for f in ("arial.ttf", "C:/Windows/Fonts/arial.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"):
+        try:
+            font = ImageFont.truetype(f, 34)
+            break
+        except Exception:
+            continue
+    d.text((120, 120), "Elenco attività", fill=(25, 25, 25), font=font)
+    xs = [100, 420, 900, 1140]
+    ys = [260 + k * 110 for k in range(rows + 1)]
+    for y in ys:
+        d.line((xs[0], y, xs[-1], y + 8), fill=(20, 20, 20), width=4)
+    for x in xs:
+        d.line((x, ys[0], x + 5, ys[-1]), fill=(20, 20, 20), width=4)
+    data = [("Voce", "Descrizione", "Stato")] + [(f"Voce {k}", f"Attivita numero {k}", "Fatto") for k in range(1, rows)]
+    for r, row in enumerate(data):
+        for c, text in enumerate(row):
+            d.text((xs[c] + 25, ys[r] + 35), text, fill=(25, 25, 25), font=font)
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=90)
+    doc = fitz.open()
+    doc.new_page(width=595, height=842).insert_image(fitz.Rect(0, 0, 595, 842), stream=buf.getvalue())
+    doc.save(path)
+    return data
+
+
+def test_export_scan():
+    """1.5.2: a scanned page exports as text and tables, not as one picture of the page."""
+    import docx
+    import numpy as np
+    import pymupdf as fitz
+    from engine.document import Session
+    from engine import export
+    from engine.layout import scan_tables
+    tmp = tempfile.mkdtemp(prefix="calamo-exp-")
+    path = os.path.join(tmp, "modulo.pdf")
+    data = _scan_form(path)
+    s = Session()
+    s.open(path)
+    pix = s.doc[0].get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+    rgb = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.width, 3)
+    t = scan_tables(rgb)
+    check("scan table found (rows, columns)", len(t) == 1 and len(t[0]["h"]) - 1 == len(data) and len(t[0]["v"]) - 1 == 3,
+          [(len(x["h"]) - 1, len(x["v"]) - 1) for x in t])
+    if sys.platform != "win32":
+        return                                       # the reading needs the Windows OCR
+    s.analyze(0)
+    out = os.path.join(tmp, "modulo.docx")
+    export.to_docx(s, out)
+    d = docx.Document(out)
+    pics = len(d.inline_shapes)
+    check("export scan: no picture of the whole page", pics == 0, f"{pics} immagini")
+    cells = [[c.text for c in r.cells] for r in d.tables[0].rows] if d.tables else []
+    check("export scan: the table as a Word table", len(cells) == len(data) and len(cells[0]) == 3, cells[:2])
+    ok = sum(1 for r in range(min(len(cells), len(data))) for c in range(3)
+             if c < len(cells[r]) and data[r][c].lower().replace("à", "a") in cells[r][c].lower().replace("à", "a"))
+    check("export scan: cells read in their place", ok >= len(data) * 3 * 0.7, f"{ok} di {len(data) * 3}: {cells}")
+    check("export scan: title as text", any("Elenco" in p.text for p in d.paragraphs), [p.text for p in d.paragraphs][:3])
+
+
+def test_print_now():
+    """1.5.2: quick print without any dialog (to a file, with Microsoft Print to PDF)."""
+    if sys.platform != "win32":
+        return
+    import pymupdf as fitz
+    from engine import printing
+    tmp = tempfile.mkdtemp(prefix="calamo-print-")
+    doc = fitz.open()
+    doc.new_page().insert_text((72, 100), "Pagina uno da stampare", fontsize=20)
+    p2 = doc.new_page(width=842, height=595)
+    p2.insert_text((72, 100), "Pagina due, orizzontale", fontsize=20)
+    out = os.path.join(tmp, "stampa.pdf")
+    print("   stampante predefinita:", printing.default_printer())
+    try:
+        printing.print_pages(doc, [0, 1], "Prova", printer="Microsoft Print to PDF", output=out)
+    except RuntimeError as e:
+        print("SKIP print:", e)
+        return
+    for _ in range(40):                            # the spooler writes the file a moment later
+        if os.path.exists(out) and os.path.getsize(out) > 1000:
+            break
+        time.sleep(0.5)
+    n = len(fitz.open(out)) if os.path.exists(out) else 0
+    check("print now: two pages printed", n == 2, f"{n} pagine")
+
+
 def test_setup_script():
     import updater
     text = updater.build_script({"kind": "setup"}, r"C:\T\CalamoPDF-Setup.exe", True,
@@ -747,7 +840,7 @@ def test_release_check():
 
 if __name__ == "__main__":
     for t in (test_ocr, test_writings, test_skewed_scan, test_handreader, test_reader_in_analysis, test_table_form, test_rewrite_keeps_background, test_remove_and_mark,
-              test_rotated_page_edit, test_editing, test_more, test_graphics, test_real_services, test_portable_swap,
+              test_rotated_page_edit, test_editing, test_more, test_graphics, test_real_services, test_export_scan, test_print_now, test_portable_swap,
               test_setup_script, test_release_check):
         try:
             t()

@@ -29,8 +29,8 @@ if ink:
     s.correct_ink(0, target["id"], "Firmato: Marco")
     s.edit_ink(0, target["id"], "Firmato: Marta Rossi")
 s.save(os.path.join(out_dir, "edited.pdf"))
-export.to_docx(s.doc, s.ink, os.path.join(out_dir, "edited.docx"))
-print("sheets", export.to_xlsx(s.doc, s.ink, os.path.join(out_dir, "edited.xlsx")))
+export.to_docx(s, os.path.join(out_dir, "edited.docx"))
+print("sheets", export.to_xlsx(s, os.path.join(out_dir, "edited.xlsx")))
 import pymupdf as fitz  # noqa: E402
 fitz.open(os.path.join(out_dir, "edited.pdf"))[0].get_pixmap(dpi=110).save(os.path.join(out_dir, "page.png"))
 print("OK")

@@ -350,6 +350,10 @@ def read_page(job, learning, lang_tag=None, reader=None, lexicon=None, prefer=No
                            "doubt": 1.0, "synthetic": False})
     except Exception:
         pass
+    try:
+        result = _table_cells(result, rgb, zoom, half)
+    except Exception:
+        pass                                   # without the table, the lines as the OCR found them
     result = _split_tall(result, rgb, zoom)
     for l in result:
         _measure(l, rgb, zoom)
@@ -362,6 +366,7 @@ def read_page(job, learning, lang_tag=None, reader=None, lexicon=None, prefer=No
         # handwriting, and any ink nobody read (the OCR may miss print on a poor photo)
         if l["kind"] == "hand" or (l["source"] == "unread" and reader is not None):
             _second_opinion(l, _crop(rgb, l["bbox"], zoom), zoom, reader, lexicon, prefer)
+        l["raw"] = tidy(l["raw"])
         text, learned = learning.apply(l["raw"])
         l["text"] = text
         if learned:
@@ -411,11 +416,64 @@ def read_region(job, rects, learning, lang_tag=None, reader=None, lexicon=None, 
             _measure(l, rgb, zoom)
             if crop.size and (l["kind"] == "hand" or l["source"] == "unread"):
                 _second_opinion(l, crop, zoom, reader, lexicon, prefer)
+            l["raw"] = tidy(l["raw"])
             text, learned = learning.apply(l["raw"])
             l["text"] = text
             if learned:
                 l["source"] = "learned"
             out.append(l)
+    return out
+
+
+def _table_cells(lines, rgb, zoom, half):
+    """A line the OCR found across a border of a ruled table (printed or drawn by hand) is
+    cut where the border runs ("20/12/2025 Da fare" are two cells), each piece with its own
+    words; a piece with no words is left for the reader. Every line inside a table keeps
+    the cell it is in, so two cells are never joined into one line again."""
+    from .layout import scan_tables
+    tables = scan_tables(half, zoom / 2)
+    if not tables:
+        return lines
+    out = []
+    for l in lines:
+        x0, y0, x1, y1 = l["bbox"]
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        t = next((t for t in tables if t["bbox"][0] <= cx <= t["bbox"][2] and t["bbox"][1] <= cy <= t["bbox"][3]), None)
+        if t is None:
+            out.append(l)
+            continue
+        z = t["zoom"]
+        row = sum(1 for h in t["h"] if h.at(cx * z) / z <= cy) - 1
+        xs = [v.at(cy * z) / z for v in t["v"]]
+        cuts = [x for x in xs if x0 + 3 < x < x1 - 3]
+        edges = [x0] + cuts + [x1]
+        ti = tables.index(t)
+        for k in range(len(edges) - 1):
+            a, b = edges[k], edges[k + 1]
+            if b - a < 5:
+                continue
+            col = sum(1 for x in xs if x <= (a + b) / 2) - 1
+            if not cuts:
+                l["cell"] = [ti, row, col]
+                out.append(l)
+                break
+            mine = [w for w in l["words"] if a <= (w["bbox"][0] + w["bbox"][2]) / 2 < b]
+            # the piece tight to its ink, without the border
+            X0, X1 = int((a + 1.5) * zoom), int((b - 1.5) * zoom)
+            Y0, Y1 = int(y0 * zoom), int(y1 * zoom)
+            sub = rgb[max(Y0, 0):Y1, max(X0, 0):X1]
+            if sub.size == 0:
+                continue
+            m = WR.ink_mask(sub)
+            cols = np.nonzero(m.mean(axis=0) > 0.02)[0]
+            if not mine and len(cols) < 3:
+                continue                                 # only the border was there
+            if len(cols):
+                a, b = (max(X0, 0) + cols[0]) / zoom, (max(X0, 0) + cols[-1] + 1) / zoom
+            raw = " ".join(w["text"] for w in mine)
+            out.append({"bbox": [a, y0, b, y1], "raw": raw, "text": raw, "words": mine,
+                        "source": l["source"] if mine else "unread", "doubt": _doubt(raw) if mine else 1.0,
+                        "synthetic": False, "cell": [ti, row, col]})
     return out
 
 
@@ -499,6 +557,9 @@ def _join_pieces(lines, rgb, zoom, border=None):
             # only handwriting, or ink nobody read, next to handwriting
             if not all(x["kind"] == "hand" or x["source"] == "unread" for x in (l, m)):
                 continue
+            if l.get("cell") != m.get("cell"):
+                continue                       # two cells of a table: never one line
+                continue
             a, b = m["bbox"], l["bbox"]
             inter = min(a[3], b[3]) - max(a[1], b[1])
             h = max(a[3] - a[1], b[3] - b[1])
@@ -529,31 +590,44 @@ def _second_opinion(line, crop, zoom, reader, lexicon, prefer):
         options.append((line["raw"], "ocr", None))
     if reader is not None:
         try:
-            text, conf = reader.read(crop)
+            readings = [reader.read(crop)]
             # as many letters as the ink is long: a reading of another length is the model
             # making things up (it does that on smudges, ruled lines, drawings)
             clean = reader.clean(crop) if hasattr(reader, "clean") else crop
             aspect = clean.shape[1] / max(clean.shape[0], 1)
             def plausible(t):
-                return t and 0.5 <= len(t) / max(aspect, 0.5) <= 7.0 and "000 000" not in t
-            if plausible(text):
-                options.append((text, "model", conf))
+                if not t or not 0.5 <= len(t) / max(aspect, 0.5) <= 4.5:
+                    return False
+                toks = t.split()
+                if len(toks) >= 4 and max(toks.count(x) for x in set(toks)) >= len(toks) / 2:
+                    return False                 # "0 0 0 0 0": the model stuck on a smudge
+                if english_share(t) > 0.4 or re.search(r"[a-z][A-Z][a-z]", t):
+                    return False                 # a made-up English sentence ("HelpLearn to edit…")
+                return "000 000" not in t
+            for text, conf in readings:
+                if plausible(text):
+                    options.append((text, "model", conf))
         except Exception:
             pass
     if not options:
         return
     best, best_q = None, None
     for text, src, conf in options:
-        fixed, n = lexicon.correct_text(text, prefer) if lexicon else (text, 0)
+        fixed, n = lexicon.correct_text(tidy(text), prefer) if lexicon else (tidy(text), 0)
         ratio = lexicon.ratio(fixed) if lexicon else 0.5
         q = ratio - 0.06 * n + (0.2 * conf if conf is not None else 0.0)
+        # the reader was trained on English: on a short or messy Italian line it sometimes
+        # makes up English words ("A little", "at the house"); a reading made of them loses
+        q -= 0.6 * english_share(fixed)
         if best_q is None or q > best_q:
             best, best_q = (fixed, src, conf, ratio), q
     text, src, conf, ratio = best
     # two readers that disagree: whichever won, the reading is not sure
-    if len(options) == 2:
+    first_ocr = next((o for o in options if o[1] == "ocr"), None)
+    first_model = next((o for o in options if o[1] == "model"), None)
+    if first_ocr and first_model:
         from .quality import cer
-        line["agree"] = round(1 - cer(options[0][0], options[1][0]), 2)
+        line["agree"] = round(1 - cer(first_ocr[0], first_model[0]), 2)
     if line["source"] == "unread" and src == "model" and (conf or 0) < 0.3:
         return                                  # the model is guessing: leave it unread
     if text != line["raw"]:
@@ -657,6 +731,69 @@ def fix_letters(word):
 def _is_number(tok):
     core = tok.strip("()[]\"'.,;:!?%€+-")
     return bool(core) and any(c.isdigit() for c in core) and all(c.isdigit() or c in _NUM_SEP for c in core)
+
+
+# --------------------------------------------------------------------------- punctuation and dates
+def english_share(text):
+    """Share of the words of a reading that are English and not Italian."""
+    from .lexicon import ENGLISH
+    toks = [t.strip(".,;:!?()\"'«»").lower() for t in text.split()]
+    toks = [t for t in toks if t.isalpha() and len(t) > 1]
+    if not toks:
+        return 0.0
+    eng = sum(1 for t in toks if t in ENGLISH)
+    return eng / len(toks)
+
+
+_ELISION = {"l", "un", "dell", "all", "dall", "nell", "sull", "coll", "quest", "quell", "c", "d", "s", "m", "t",
+            "v", "n", "tutt", "anch", "dov", "com", "bell", "sant", "nessun", "qual", "cos"}
+_SEP = r"\s*[/|Il(),.\\-]\s*"
+_DATE = re.compile(r"(?<![\d/])(\d{1,2})" + _SEP + r"(\d{1,2})" + _SEP + r"(\d{4}|\d{2})(?![\d/])")
+_DATE_GLUED = re.compile(r"(?<![\d/])(\d{2})(\d{2})" + r"\s*[/|Il1(),.]\s*" + r"(\d{4}|\d{2})(?![\d/])")
+
+
+def _date(m):
+    d, mo, y = int(m.group(1)), int(m.group(2)), m.group(3)
+    if 1 <= d <= 31 and 1 <= mo <= 12:
+        return f"{m.group(1).zfill(2)}/{m.group(2).zfill(2)}/{y}"
+    return m.group(0)
+
+
+def tidy(text):
+    """Punctuation and dates as they are written in Italian, whatever the reading made of
+    them: "Gil ," -> "Gil,", "( GET" -> "(GET", "l ' utente" -> "l'utente",
+    "27 ( 12 , 2025" -> "27/12/2025", "1812 , 2025" -> "18/12/2025"; quotes and dots
+    left alone by themselves (specks of the paper) go."""
+    if not text:
+        return text
+    t = " ".join(text.split())
+    t = _DATE.sub(_date, t)
+    t = _DATE_GLUED.sub(_date, t)
+    t = re.sub(r"(\d)\s*/\s*(\d)", r"\1/\2", t)                     # 05 / 01 -> 05/01
+    t = re.sub(r"\s+([,.;:!?%)\]»])", r"\1", t)                       # no space before , . ; : ! ? )
+    t = re.sub(r"([(\[«])\s+", r"\1", t)                              # nor after (
+    t = re.sub(r"([,;:!?])(?=[^\s\d,.;:!?)\]»\"'/-])", r"\1 ", t)        # a space after , ; : ! ?
+    t = re.sub(r"\.{4,}", "...", t)
+    t = re.sub(r"([,;:!?])\1+", r"\1", t)                               # ",," -> ","
+    t = re.sub(r"([,;:])\.|\.([,;:])", lambda m: m.group(1) or m.group(2), t)
+    # apostrophes: an elision joins the next word, a stray one goes
+    def apo(m):
+        w, nxt = m.group(1), m.group(2)
+        if w.lower() in _ELISION and nxt and nxt[0].lower() in "aeiouhàèéìòù":
+            return f"{w}'{nxt}"
+        if w.lower() == "po":
+            return f"{w}' {nxt}" if nxt else f"{w}'"
+        return f"{w} {nxt}" if nxt else w
+    # "I'utente": a capital I read for the l of an elision
+    t = re.sub(r"(?<![\w'])I\s*['’`]\s*(?=[aeiouhàèéìòùAEIOU])", "l'", t)
+    t = re.sub(r"(\w+)\s*['’`]\s*(\w*)", apo, t)
+    # what is left of marks on their own: specks of the paper, not writing
+    toks = [w for w in t.split(" ") if re.search(r"[\w€%&@#°()]", w) or w in ("-", "–", "/", "+", "=", "...")]
+    t = " ".join(toks)
+    if t.count('"') % 2:
+        t = t.replace('"', "")                                         # an unpaired quote
+    t = re.sub(r"\(\)", "", t)
+    return t.strip()
 
 
 def _doubt(text):

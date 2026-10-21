@@ -951,3 +951,11 @@ textarea.fill-in { resize: none; padding: 2px 3px; }
 .pages { padding-top: 66px; }
 .findbar { top: 62px; }
 .stage.has-tabs .findbar { top: 96px; }
+
+/* the corner handle to resize an element of the page */
+.rz { position: absolute; right: -5px; bottom: -5px; width: 10px; height: 10px; border-radius: 3px; background: #fff;
+      border: 1.5px solid #2F4C95; cursor: nwse-resize; pointer-events: auto; display: none; z-index: 2; }
+.tool-edit .blk:hover > .rz, .tool-edit .ink:hover > .rz, .tool-edit .gfx:hover > .rz,
+.tool-select .blk:hover > .rz, .tool-select .ink:hover > .rz, .tool-select .gfx:hover > .rz { display: block; }
+.rz-ghost { position: absolute; border: 1.5px dashed #2F4C95; border-radius: 3px; background: rgba(47, 76, 149, .06); pointer-events: none; z-index: 6; }
+body.resizing-el, body.resizing-el * { cursor: nwse-resize !important; }

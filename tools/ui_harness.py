@@ -75,6 +75,29 @@ def make_docs():
         q.insert_text((60, 80), f"Capitolo {k + 1}", fontsize=20)
         q.insert_text((60, 120), "Testo normale del capitolo, con qualche parola.", fontsize=11)
     d.save(os.path.join(WORK, "modulo.pdf"))
+    # a scanned form: a table drawn on paper, with writing and a mark in its cells
+    from PIL import ImageFont
+    img = Image.new("RGB", (1240, 1754), (240, 237, 228))
+    dr = ImageDraw.Draw(img)
+    font = None
+    for f in ("DejaVuSans.ttf", "arial.ttf", "C:/Windows/Fonts/arial.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"):
+        try:
+            font = ImageFont.truetype(f, 30)
+            break
+        except Exception:
+            continue
+    for y in range(300, 1001, 140):
+        dr.line((120, y, 1100, y + 6), fill=(30, 40, 150), width=4)
+    for x in (120, 520, 1100):
+        dr.line((x, 300, x + 4, 1006), fill=(30, 40, 150), width=4)
+    for k in range(5):
+        dr.text((150, 345 + k * 140), f"Voce numero {k + 1}", fill=(30, 40, 150), font=font)
+    dr.ellipse((700, 470, 780, 550), outline=(200, 30, 30), width=6)          # a mark in a cell
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=90)
+    d = fitz.open()
+    d.new_page(width=595, height=842).insert_image(fitz.Rect(0, 0, 595, 842), stream=buf.getvalue())
+    d.save(os.path.join(WORK, "scan_tab.pdf"))
     # a page to read aloud
     d = fitz.open()
     d.new_page().insert_text((72, 100), "Buongiorno. Questa è una prova di lettura ad alta voce.", fontsize=14)

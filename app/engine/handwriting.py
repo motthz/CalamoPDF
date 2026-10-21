@@ -341,6 +341,8 @@ class HandwritingLibrary:
         for l, j in good:
             m = metrics.get(j)
             if l.get("source") != "user":
+                if l.get("cell") and len(l["text"].replace(" ", "")) < 8:
+                    continue           # a short piece cut at a table border: its letters are often cut too
                 if med and m and not (0.65 <= m[1] / med <= 1.5):
                     continue
                 h = l["bbox"][3] - l["bbox"][1]

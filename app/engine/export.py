@@ -53,7 +53,18 @@ def _hidden_rects(page):
 
 
 # --------------------------------------------------------------------------- Word
-def to_docx(doc, ink, path, progress=None):
+def _font_size(line):
+    printed = line.get("kind") == "print"
+    return max(8, min(round((line["bbox"][3] - line["bbox"][1]) * (0.75 if printed else 0.8)), 28))
+
+
+def to_docx(session, path, progress=None):
+    """A Word document with the text as paragraphs (with their font, size and colour),
+    tables as Word tables, pictures as pictures. On a scanned page the lines Calamo read
+    become text, its ruled tables Word tables, its drawings pictures: never the page as
+    one picture (unless there is nothing to read on it, like a photo)."""
+    from .layout import page_items
+    doc = session.doc
     word = Document()
     st = word.styles["Normal"]
     st.font.name = "Calibri"
@@ -68,86 +79,79 @@ def to_docx(doc, ink, path, progress=None):
     sec.left_margin = sec.right_margin = sec.top_margin = sec.bottom_margin = margin
     usable = first.width - 80
 
-    for pi, page in enumerate(doc):
+    n = len(doc)
+    for pi in range(n):
         if progress:
-            progress(pi, len(doc))
-        tables = _tables(page)
-        trects = [fitz.Rect(t.bbox) for t in tables]
-        items = []
-        d = page.get_text("dict", flags=fitz.TEXT_PRESERVE_IMAGES | fitz.TEXT_PRESERVE_LIGATURES)
-        for b in d["blocks"]:
-            r = fitz.Rect(b["bbox"])
-            if b["type"] == 0:
-                if _inside(r, trects):
-                    continue
-                if ink.get(pi):
-                    b = dict(b, lines=[dict(l, spans=[s for s in l["spans"] if s.get("alpha", 255) > 0])
-                                       for l in b["lines"]])
-                    if not any(s["text"].strip() for l in b["lines"] for s in l["spans"]):
-                        continue
-                items.append((r.y0, r.x0, "text", b))
-            elif b["type"] == 1 and b.get("image") and r.width > 8 and r.height > 8:
-                items.append((r.y0, r.x0, "image", b))
-        for t, tr in zip(tables, trects):
-            items.append((tr.y0, tr.x0, "table", t))
-        for l in _ink_lines(ink, pi):
-            items.append((l["bbox"][1], l["bbox"][0], "ink", l))
-        items.sort(key=lambda it: (round(it[0] / 4), it[1]))
-
+            progress(pi, n)
+        items, info = page_items(session, pi)
+        W = info["size"][0]
         last_bottom = None
-        for y, x, kind, obj in items:
+        row_para, row_bottom = None, None
+        for it in items:
+            kind, bb = it["kind"], it["bbox"]
+            gap = Pt(max(0, min(bb[1] - last_bottom, 40))) if last_bottom is not None else None
             if kind == "text":
+                b = it["block"]
                 para = word.add_paragraph()
                 pf = para.paragraph_format
-                if last_bottom is not None:
-                    gap = obj["bbox"][1] - last_bottom
-                    pf.space_before = Pt(max(0, min(gap, 40)))
-                indent = obj["bbox"][0] - page.rect.x0 - 40
+                if gap is not None:
+                    pf.space_before = gap
+                indent = bb[0] - 40
                 if indent > 6:
                     pf.left_indent = Pt(min(indent, usable * 0.6))
-                lines = [l for l in obj["lines"] if any(s["text"].strip() for s in l["spans"])]
+                lines = b["lines"]
                 if len(lines) == 1:
-                    bw = obj["bbox"][2] - obj["bbox"][0]
-                    cx = (obj["bbox"][0] + obj["bbox"][2]) / 2
-                    if abs(cx - page.rect.width / 2) < 12 and bw < page.rect.width * 0.7:
+                    cx = (bb[0] + bb[2]) / 2
+                    if abs(cx - W / 2) < 12 and bb[2] - bb[0] < W * 0.7:
                         para.alignment = WD_ALIGN_PARAGRAPH.CENTER
                         pf.left_indent = None
                 for li, l in enumerate(lines):
-                    for s in l["spans"]:
-                        text = s["text"]
-                        if not text:
+                    for sp in l["spans"]:
+                        if not sp["text"]:
                             continue
-                        run = para.add_run(text)
-                        bold, italic, serif, mono = F.style_from(F.clean_name(s["font"]), s["flags"])
+                        run = para.add_run(sp["text"])
+                        bold, italic, serif, mono = F.style_from(F.clean_name(sp["font"]), sp["flags"])
                         run.bold, run.italic = bold, italic
-                        run.font.size = Pt(round(s["size"] * 2) / 2)
-                        run.font.name = F.css_family(s["font"], s["flags"])
-                        c = s["color"]
+                        run.font.size = Pt(round(sp["size"] * 2) / 2)
+                        run.font.name = F.css_family(sp["font"], sp["flags"])
+                        c = sp["color"]
                         run.font.color.rgb = RGBColor((c >> 16) & 255, (c >> 8) & 255, c & 255)
-                        if s["flags"] & 1:
+                        if sp["flags"] & 1:
                             run.font.superscript = True
                     if li < len(lines) - 1:
-                        last_text = "".join(s["text"] for s in l["spans"]).rstrip()
+                        last_text = "".join(sp["text"] for sp in l["spans"]).rstrip()
                         if last_text.endswith("-") and para.runs:
                             para.runs[-1].text = para.runs[-1].text.rstrip()[:-1]
                         else:
                             para.add_run(" ")
-                last_bottom = obj["bbox"][3]
-            elif kind == "image":
-                try:
-                    stream = io.BytesIO(obj["image"])
-                    w = min(obj["bbox"][2] - obj["bbox"][0], usable)
-                    word.add_picture(stream, width=Pt(w))
-                    word.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
-                except Exception:
-                    pass
-                last_bottom = obj["bbox"][3]
+                last_bottom, row_para = bb[3], None
+            elif kind == "ink":
+                l = it["line"]
+                printed = l.get("kind") == "print"
+                # lines side by side on one row of the page stay on one row, separated by a tab
+                if row_para is not None and bb[0] >= row_bottom[2] - 2 and (
+                        min(bb[3], row_bottom[3]) - max(bb[1], row_bottom[1])) >= 0.5 * min(bb[3] - bb[1], row_bottom[3] - row_bottom[1]):
+                    para = row_para
+                    para.add_run("\t")
+                else:
+                    para = word.add_paragraph()
+                    if gap is not None:
+                        para.paragraph_format.space_before = gap
+                    indent = bb[0] - 40
+                    if indent > 6:
+                        para.paragraph_format.left_indent = Pt(min(indent, usable * 0.6))
+                run = para.add_run(l["text"])
+                run.font.name = "Calibri" if printed else HAND_FONT
+                run.font.size = Pt(_font_size(l))
+                run.font.color.rgb = RGBColor(0x1A, 0x1B, 0x20) if printed else RGBColor(0x1F, 0x2A, 0x5A)
+                row_para, row_bottom = para, list(bb)
+                last_bottom = max(last_bottom or 0, bb[3])
             elif kind == "table":
-                data = obj.extract()
-                rows, cols = len(data), max(len(r) for r in data)
-                tbl = word.add_table(rows=rows, cols=cols)
+                rows = it["rows"]
+                cols = max(len(r) for r in rows)
+                tbl = word.add_table(rows=len(rows), cols=cols)
                 tbl.style = "Table Grid"
-                for ri, row in enumerate(data):
+                for ri, row in enumerate(rows):
                     for ci, val in enumerate(row):
                         cell = tbl.cell(ri, ci)
                         cell.text = (val or "").replace("\n", " ")
@@ -155,18 +159,16 @@ def to_docx(doc, ink, path, progress=None):
                             for p in cell.paragraphs:
                                 for run in p.runs:
                                     run.bold = True
-                last_bottom = obj.bbox[3]
-            elif kind == "ink":
-                para = word.add_paragraph()
-                if last_bottom is not None:
-                    para.paragraph_format.space_before = Pt(max(0, min(obj["bbox"][1] - last_bottom, 40)))
-                run = para.add_run(obj["text"])
-                printed = obj.get("kind") == "print"
-                run.font.name = "Calibri" if printed else HAND_FONT
-                run.font.size = Pt(max(8, min(round((obj["bbox"][3] - obj["bbox"][1]) * (0.75 if printed else 0.8)), 28)))
-                run.font.color.rgb = RGBColor(0x1A, 0x1B, 0x20) if printed else RGBColor(0x1F, 0x2A, 0x5A)
-                last_bottom = obj["bbox"][3]
-        if pi < len(doc) - 1:
+                last_bottom, row_para = bb[3], None
+            elif kind == "image":
+                try:
+                    w = min(bb[2] - bb[0], usable)
+                    word.add_picture(io.BytesIO(it["png"]), width=Pt(w))
+                    word.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                except Exception:
+                    pass
+                last_bottom, row_para = bb[3], None
+        if pi < n - 1:
             word.add_paragraph().add_run().add_break(WD_BREAK.PAGE)
     word.save(path)
     return path
@@ -250,7 +252,7 @@ def _layout_rows(page, ink_lines):
     return out
 
 
-def to_xlsx(doc, ink, path, progress=None):
+def to_xlsx(session, path, progress=None):
     wb = Workbook()
     wb.remove(wb.active)
     head_fill = PatternFill("solid", fgColor="1F2430")
@@ -280,13 +282,17 @@ def to_xlsx(doc, ink, path, progress=None):
         if header and rows:
             ws.freeze_panes = "A2"
 
-    for pi, page in enumerate(doc):
+    from .layout import page_items
+    doc, ink = session.doc, session.ink
+    for pi in range(len(doc)):
+        page = doc[pi]
         if progress:
             progress(pi, len(doc))
-        tables = _tables(page)
-        for ti, t in enumerate(tables, start=1):
+        items, _ = page_items(session, pi)
+        tables = [it["rows"] for it in items if it["kind"] == "table"]
+        for ti, rows in enumerate(tables, start=1):
             ws = wb.create_sheet(f"P{pi + 1} Tabella {ti}"[:31])
-            write(ws, t.extract(), header=True)
+            write(ws, rows, header=True)
             count += 1
         if not tables:
             rows = _layout_rows(page, _ink_lines(ink, pi))

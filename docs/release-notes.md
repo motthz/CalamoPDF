@@ -1,3 +1,30 @@
+## Novità di Calamo PDF Studio 1.5.2
+
+**Esportazione vera, anche dalle scansioni.** Word, Excel, PowerPoint, pagina web e testo non mettono più la pagina come un'unica immagine:
+- le pagine scansionate vengono **lette in automatico** prima di esportare (con la barra di avanzamento);
+- il **testo** diventa testo modificabile, le **tabelle** diventano tabelle vere (righe e colonne prese dalla griglia disegnata sul foglio, anche se storta o ondulata), le **immagini e la grafica** (timbri, loghi, segni) vengono ritagliate a parte con lo sfondo trasparente;
+- in PowerPoint e nella pagina web lo sfondo resta la carta della scansione, ma senza le scritte, che stanno sopra come testo.
+
+**Lettura più precisa, frase per frase.** Provata su 8 foto dello stesso modulo compilato con grafie diverse (le più difficili scritte apposta male):
+- le righe vengono tagliate sui **bordi delle celle**: le parole di due colonne vicine non si mescolano più in una sola frase;
+- **punteggiatura e date** sistemate (spazi prima e dopo virgole e punti, apostrofi, "I'" letto al posto di "l'", date come 18/02/2024);
+- il lettore della scrittura a mano non inventa più **parole inglesi** o sequenze ripetute quando la grafia è illeggibile;
+- celle lette correttamente: dal 34% al 44% in media (sui moduli scritti in modo leggibile dal 50–70% fino all'88%); parole trovate dal 45% al 50%, parole giuste fra quelle lette dal 41% al 52%.
+
+**Ridimensiona ogni elemento.** Passando sopra un testo, una scritta, una tabella, un disegno, un'immagine o un campo compare una maniglia nell'angolo: trascinala per ingrandire o rimpicciolire (le proporzioni restano, Maiusc per cambiarle). Il testo cambia dimensione del carattere e resta modificabile.
+
+**Elementi dentro le tabelle.** Su una scansione non ancora letta, ogni scritta di una cella e ogni segno (un cerchio, una firma, un timbro) si prende da solo; la tabella intera si prende dal bordo.
+
+**Stampa con tre possibilità**: *Stampa…* (con la finestra delle impostazioni), *Stampa tutto subito* e *Stampa questa pagina subito* sulla stampante predefinita, senza finestre.
+
+**Niente più blocchi e chiusure improvvise.**
+- La libreria dei PDF non è fatta per lavorare da più parti contemporaneamente: lettura in sottofondo, miniature ed esportazioni ora fanno a turno. Era la causa dei crash casuali.
+- Chiudere la finestra con un documento modificato poteva bloccare l'app.
+- Le pagine molto grandi vengono disegnate a una risoluzione limitata (prima potevano esaurire la memoria); le pagine lontane da quella che guardi liberano la memoria.
+- Se succede comunque un errore grave viene scritto in `errori.log` nella cartella dei dati di Calamo.
+
+**Correzioni.** Un'immagine spostata o ridimensionata due volte poteva sparire.
+
 ## Novità di Calamo PDF Studio 1.5.1
 
 **Audit completo: ogni funzione provata come un utente, con screenshot, e spinta al limite** (documenti da 500 e 3000 pagine, scansioni da 77 MB, moduli con 600 campi, input sbagliati di proposito).

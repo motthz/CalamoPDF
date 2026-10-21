@@ -582,6 +582,8 @@ $("#splitGo").onclick = () => guarded(async () => {
 // ---------------------------------------------------------------- the other elements of a page
 // Drawings, tables, pictures, form fields and the graphics of a scan: found once per page
 // version (on a scan it takes a moment), drawn under the text so a click on text edits it.
+// the handle in the corner of every element of the page: drag it to make it bigger or smaller
+const RZ = '<i class="rz" title="Trascina per ingrandire o rimpicciolire"></i>';
 function drawGraphics(P, frag, s, framed = false) {
   if (S.tool !== "edit" && S.tool !== "select") return;
   const g = P.data.graphics;
@@ -589,17 +591,21 @@ function drawGraphics(P, frag, s, framed = false) {
   if (!g) return;
   // an element with text on it (a table, a box with its label) is taken by its edges, over
   // the text; the text inside stays to be clicked and edited
+  // (and an element with other elements in it: a table of a scan with a mark in a cell)
   const texts = [...P.data.blocks.map(b => b.bbox), ...(P.data.ink || []).map(l => l.bbox)];
-  g.forEach(e => {
+  const area = b => (b[2] - b[0]) * (b[3] - b[1]);
+  // the smallest on top: a mark inside a box can be taken, the box by its edges
+  g.slice().sort((a, b) => area(b.bbox) - area(a.bbox)).forEach(e => {
     if (S.tool === "select" && e.kind === "image") return;     // already an object there
-    const b = e.bbox, holds = texts.some(t => { const cx = (t[0] + t[2]) / 2, cy = (t[1] + t[3]) / 2;
-      return cx > b[0] && cx < b[2] && cy > b[1] && cy < b[3]; });
+    const b = e.bbox, holds = [...texts, ...g.filter(o => o !== e).map(o => o.bbox)].some(t => {
+      const cx = (t[0] + t[2]) / 2, cy = (t[1] + t[3]) / 2;
+      return cx > b[0] && cx < b[2] && cy > b[1] && cy < b[3] && (t[2] - t[0]) * (t[3] - t[1]) < (b[2] - b[0]) * (b[3] - b[1]) * 0.9; });
     if (holds !== framed) return;
     const d = document.createElement("div");
     d.className = "gfx" + (e.kind === "scan" ? " scan" : "") + (holds ? " framed" : "");
     d.dataset.id = e.id;
     d.title = `${e.label}: trascina per spostare`;
-    if (holds) d.innerHTML = '<i class="e t"></i><i class="e r"></i><i class="e b"></i><i class="e l"></i>';
+    d.innerHTML = (holds ? '<i class="e t"></i><i class="e r"></i><i class="e b"></i><i class="e l"></i>' : "") + RZ;
     Object.assign(d.style, box(e.bbox, s, 2));
     frag.appendChild(d);
   });
@@ -615,6 +621,50 @@ async function loadGraphics(P) {
     drawOverlay(P);
   } catch (e) { /* the page can still be edited without them */ }
   finally { if (P.gfxLoading === v) P.gfxLoading = null; }
+}
+
+// ---------------------------------------------------------------- resize from the corner handle
+// Text, writing, pictures and graphics of a scan keep their proportions; drawings, tables
+// and form fields stretch freely (Maiusc keeps the proportions of those too).
+function startResize(P, e, el, item, kind) {
+  e.preventDefault(); e.stopPropagation();
+  const s = scale(), a = pagePoint(P, e), bb = item.bbox.slice();
+  const w0 = bb[2] - bb[0], h0 = bb[3] - bb[1];
+  const keep = kind !== "gfx" || ["image", "scan"].includes(item.kind);
+  const out = document.createElement("div");
+  out.className = "rz-ghost";
+  Object.assign(out.style, box(bb, s, 2));
+  P.overlay.appendChild(out);
+  el.classList.add("drag-src");
+  document.body.classList.add("resizing-el");
+  let rect = bb;
+  const move = ev => {
+    const b = pagePoint(P, ev);
+    let w = Math.max(6, w0 + b.x - a.x), h = Math.max(4, h0 + b.y - a.y);
+    if (keep || ev.shiftKey) { const k = Math.max(w / w0, h / h0); w = w0 * k; h = h0 * k; }
+    w = Math.min(w, P.w - bb[0]); h = Math.min(h, P.h - bb[1]);
+    rect = [bb[0], bb[1], bb[0] + w, bb[1] + h];
+    Object.assign(out.style, box(rect, s, 2));
+  };
+  const up = async () => {
+    window.removeEventListener("mousemove", move);
+    window.removeEventListener("mouseup", up);
+    document.body.classList.remove("resizing-el");
+    S.suppressClick = Date.now();
+    if (Math.abs(rect[2] - bb[2]) + Math.abs(rect[3] - bb[3]) < 1) { out.remove(); el.classList.remove("drag-src"); return; }
+    await guarded(async () => {
+      const r = kind === "gfx" ? await call("resize_graphic", P.i, item, rect)
+        : kind === "ink" ? await call("resize_ink", P.i, item.id, rect) : await call("resize_block", P.i, item.bbox, rect);
+      await afterChange();
+      toast("Dimensione cambiata (Ctrl+Z per annullare)", "ok");
+      return r;
+    }, kind === "blk" ? null : "Ridimensionamento…");
+    out.remove();
+    el.classList.remove("drag-src");
+  };
+  window.addEventListener("mousemove", move);
+  window.addEventListener("mouseup", up);
+  return true;
 }
 
 // ---------------------------------------------------------------- drag the text and the writing of a page
@@ -638,6 +688,7 @@ function startElementDrag(P, e) {
   const item = isGfx ? (P.data.graphics || []).find(g => g.id === +el.dataset.id)
     : isInk ? (P.data.ink || []).find(l => l.id === +el.dataset.id) : P.data.blocks.find(b => b.id === +el.dataset.id);
   if (!item || (isInk && item.source === "unread" && !item.text && S.tool === "edit")) return false;
+  if (e.target.classList.contains("rz")) return startResize(P, e, el, item, isGfx ? "gfx" : isInk ? "ink" : "blk");
   const s = scale(), a = pagePoint(P, e), bb = item.bbox;
   let ghost = null, d = { x: 0, y: 0 };
   const move = ev => {
@@ -673,7 +724,7 @@ function startElementDrag(P, e) {
       const r = isGfx ? await call("move_graphic", P.i, item, d.x, d.y)
         : isInk ? await call("move_ink", P.i, item.id, d.x, d.y) : await call("move_block", P.i, item.bbox, d.x, d.y);
       await afterChange();
-      toast(isGfx ? `${item.label} spostat${["Grafica", "Tabella", "Immagine"].includes(item.label) ? "a" : "o"} (Ctrl+Z per annullare)`
+      toast(isGfx ? `${item.label} spostat${["Grafica", "Tabella", "Immagine", "Scritta"].includes(item.label) ? "a" : "o"} (Ctrl+Z per annullare)`
         : isInk ? "Scritta spostata (Ctrl+Z per annullare)" : "Testo spostato (Ctrl+Z per annullare)", "ok");
       return r;
     }, isInk || item.kind === "scan" ? "Spostamento…" : null);

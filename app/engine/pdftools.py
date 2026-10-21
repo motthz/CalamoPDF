@@ -1016,28 +1016,62 @@ class PdfToolsMixin:
         with self.lock:
             parts = []
             for i, page in enumerate(self.doc):
-                # blocks in reading order: get_text("text", sort=True) is 16 times slower
-                t = "\n".join(b[4].strip() for b in page.get_text("blocks", sort=True) if b[6] == 0 and b[4].strip())
-                ink = self._ink_text(i)
-                if ink and len(t) < 20:
-                    t = ink
+                if self.ink.get(i):
+                    # a read scan: its tables as rows (cells separated by tabs), the rest in order
+                    from .layout import page_items
+                    items, _ = page_items(self, i)
+                    out = []
+                    for it in items:
+                        if it["kind"] == "table":
+                            out += ["\t".join(c for c in row) for row in it["rows"]]
+                        elif it["kind"] == "ink":
+                            out.append(it["line"]["text"].strip())
+                        elif it["kind"] == "text":
+                            out.append(" ".join("".join(sp["text"] for sp in l["spans"]).strip() for l in it["block"]["lines"]))
+                    t = "\n".join(x for x in out if x.strip())
+                else:
+                    # blocks in reading order: get_text("text", sort=True) is 16 times slower
+                    t = "\n".join(b[4].strip() for b in page.get_text("blocks", sort=True) if b[6] == 0 and b[4].strip())
                 parts.append(f"— Pagina {i + 1} —\n{t}")
             with open(path, "w", encoding="utf-8") as f:
                 f.write("\n\n".join(parts) + "\n")
             return {"path": path, "name": os.path.basename(path)}
+
+    def _scan_page_html(self, i):
+        """A scanned page Calamo has read: the page without its letters as background, and
+        every line read as real text where it is (selectable, searchable, translatable)."""
+        import base64
+        from .layout import page_items
+        items, info = page_items(self, i, with_background=True)
+        W, H = info["size"]
+        bg = base64.b64encode(info["background"]).decode() if info["background"] else ""
+        from .layout import text_size
+        spans = []
+        read = [l for l in self.ink.get(i, []) if (l.get("text") or "").strip() and l.get("source") != "unread"]
+        for l in read:
+            t = l["text"].strip()
+            x0, y0, x1, y1 = l["bbox"]
+            size = text_size(l, read)
+            spans.append(f'<span style="left:{x0:.1f}pt;top:{y0:.1f}pt;width:{x1 - x0:.1f}pt;height:{y1 - y0:.1f}pt;'
+                         f'font-size:{size:.1f}pt;line-height:{y1 - y0:.1f}pt">{_xmp_escape(t)}</span>')
+        return (f'<div class="scan" style="width:{W:.1f}pt;height:{H:.1f}pt;background-image:url(data:image/png;base64,{bg})">'
+                + "".join(spans) + "</div>")
 
     def export_html(self, path):
         with self.lock:
             title = (self.doc.metadata or {}).get("title") or os.path.splitext(os.path.basename(path))[0]
             body = []
             for i, page in enumerate(self.doc):
-                body.append(f'<section class="pdf-page" aria-label="Pagina {i + 1}">{page.get_text("html")}</section>')
+                inner = self._scan_page_html(i) if self._is_scan(page) and self.ink.get(i) else page.get_text("html")
+                body.append(f'<section class="pdf-page" aria-label="Pagina {i + 1}">{inner}</section>')
             html = f"""<!doctype html>
 <html lang="{self._lang() or 'it'}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{_xmp_escape(title)}</title>
 <style>body{{background:#ecebe8;margin:0;padding:24px 0;font-family:sans-serif}}
 .pdf-page{{width:max-content;max-width:100%;margin:0 auto 24px;background:#fff;box-shadow:0 2px 12px rgba(0,0,0,.18);overflow:auto}}
-.pdf-page>div{{margin:0 auto}}</style></head>
+.pdf-page>div{{margin:0 auto}}
+.scan{{position:relative;background-size:100% 100%;font-family:Calibri,Segoe UI,sans-serif;color:#1d2340}}
+.scan span{{position:absolute;white-space:nowrap;overflow:visible}}</style></head>
 <body>
 {chr(10).join(body)}
 </body></html>"""
@@ -1070,6 +1104,9 @@ class PdfToolsMixin:
                 k = min(SW / R.width, SH / R.height)
                 ox, oy = (SW - R.width * k) / 2, (SH - R.height * k) / 2
                 slide = prs.slides.add_slide(blank)
+                if self._is_scan(page) and self.ink.get(i):
+                    self._scan_slide(slide, i, k, ox, oy, EMU)
+                    continue
                 # the background: the page without its text
                 one = fitz.open()
                 one.insert_pdf(self.doc, from_page=i, to_page=i, annots=True)
@@ -1111,6 +1148,37 @@ class PdfToolsMixin:
                         f.color.rgb = RGBColor((c >> 16) & 255, (c >> 8) & 255, c & 255)
             prs.save(path)
             return {"path": path, "name": os.path.basename(path), "slides": n}
+
+    def _scan_slide(self, slide, i, k, ox, oy, EMU):
+        """A scanned page Calamo has read, on a slide: the page without its letters as
+        the background (tables and drawings stay), every line read as a text box."""
+        import io
+        from pptx.dml.color import RGBColor
+        from pptx.enum.text import MSO_AUTO_SIZE
+        from pptx.util import Emu, Pt
+        from .layout import page_items
+        from .layout import text_size
+        items, info = page_items(self, i, with_background=True)
+        W, H = info["size"]
+        read = [l for l in self.ink.get(i, []) if (l.get("text") or "").strip() and l.get("source") != "unread"]
+        slide.shapes.add_picture(io.BytesIO(info["background"]), Emu(int(ox * EMU)), Emu(int(oy * EMU)),
+                                 Emu(int(W * k * EMU)), Emu(int(H * k * EMU)))
+        for l in self.ink.get(i, []):
+            t = (l.get("text") or "").strip()
+            if not t or l.get("source") == "unread":
+                continue
+            x0, y0, x1, y1 = l["bbox"]
+            tb = slide.shapes.add_textbox(Emu(int((ox + x0 * k) * EMU)), Emu(int((oy + y0 * k) * EMU)),
+                                          Emu(int(max((x1 - x0) * k * 1.1, 6) * EMU)), Emu(int(max((y1 - y0) * k, 4) * EMU)))
+            tf = tb.text_frame
+            tf.margin_left = tf.margin_right = tf.margin_top = tf.margin_bottom = 0
+            tf.word_wrap = False
+            tf.auto_size = MSO_AUTO_SIZE.NONE
+            run = tf.paragraphs[0].add_run()
+            run.text = t
+            run.font.size = Pt(max(1, round(text_size(l, read, k) * 2) / 2))
+            run.font.name = "Calibri"
+            run.font.color.rgb = RGBColor(0x1D, 0x23, 0x40) if l.get("kind") != "print" else RGBColor(0x1A, 0x1B, 0x20)
 
     def remove_password(self):
         """The open document is saved without its password from now on."""
