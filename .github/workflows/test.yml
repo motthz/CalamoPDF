@@ -37,6 +37,13 @@ jobs:
           CALAMO_MODEL_DIR: ${{ runner.temp }}/calamo-model
         run: python tools/reader_bench.py
 
+      - name: Forms of the handwriting model, speed and reading
+        env:
+          CALAMO_MODEL_DIR: ${{ runner.temp }}/calamo-model
+        run: |
+          pip install onnx sympy
+          python tools/encoder_variants.py "$env:RUNNER_TEMP/variants"
+
       - name: A page of handwriting, 1.6.0 against this version (same computer)
         shell: pwsh
         env:
