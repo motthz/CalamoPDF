@@ -48,7 +48,7 @@ class HandReader:
         self._lanes = []
         self.error = None
         self.use_fast = True             # the fast encoder when downloaded (tests compare both)
-        self.use_gpu = True              # the graphics card when it is faster (tests turn it off)
+        self.use_gpu = False             # off: probing DirectML could crash the app on some drivers (1.7.2)
         self._gpu = None                 # the encoder on the graphics card, when chosen
         self._gpu_found = None           # is there a graphics card DirectML can use?
         self._seen = {}                  # line picture -> reading, the most recent 4000

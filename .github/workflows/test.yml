@@ -31,13 +31,6 @@ jobs:
           CALAMO_MODEL_DIR: ${{ runner.temp }}/calamo-model
         run: python tools/reader_bench.py
 
-      - name: Handwriting model on the graphics card (DirectML)
-        env:
-          CALAMO_MODEL_DIR: ${{ runner.temp }}/calamo-model
-        run: |
-          python -c "import onnxruntime as o; print('onnxruntime', o.__version__, o.get_available_providers())"
-          python tools/gpu_bench.py
-
       - name: Engine and updater tests
         env:
           CALAMO_MODEL_DIR: ${{ runner.temp }}/calamo-model
