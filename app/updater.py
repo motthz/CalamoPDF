@@ -33,6 +33,17 @@ def _exe():
     return os.path.abspath(sys.executable)
 
 
+def onefile():
+    """True for the one-file (portable) exe: it unpacks itself to a temporary folder, while the
+    folder build keeps its files next to the exe (or in its _internal folder)."""
+    meipass = getattr(sys, "_MEIPASS", None)
+    if not frozen() or not meipass:
+        return False
+    d = os.path.normcase(os.path.dirname(_exe()))
+    m = os.path.normcase(os.path.abspath(meipass))
+    return not (m == d or m.startswith(d.rstrip(os.sep) + os.sep))
+
+
 def installed():
     """True when running from an Inno Setup installation (not the portable exe)."""
     d = os.path.dirname(_exe())
@@ -132,8 +143,9 @@ def build_script(info, path, relaunch, exe, pids):
 def apply(info, path, relaunch):
     """Start the hidden script that installs the update once this process has exited."""
     exe = _exe()
-    # the one-file bootloader (parent process) keeps the exe locked until it exits
-    pids = [os.getpid()] + ([os.getppid()] if frozen() else [])
+    # the one-file bootloader (parent process) keeps the exe locked until it exits; the folder
+    # build has no such parent (it is Explorer, or whatever started the app)
+    pids = [os.getpid()] + ([os.getppid()] if onefile() else [])
     script = os.path.join(os.path.dirname(path), "aggiorna-calamo.cmd")
     with open(script, "w", encoding="utf-8", newline="") as f:
         f.write(build_script(info, path, relaunch, exe, pids))

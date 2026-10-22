@@ -1022,7 +1022,10 @@ class HandwritingLibrary:
         the letters; letter by letter instead of reusing pieces of words) and the one the
         handwriting reader reads back closest to text wins. The choice is remembered, so the
         preview and the page get the same one."""
-        reader = REWRITE_READER() if REWRITE_READER else None
+        # rewriting runs under the document lock: a reader whose start-up check has not
+        # finished counts as no reader (asking it would wait for the check)
+        from .handreader import READER
+        reader = REWRITE_READER() if REWRITE_READER and READER.ready() else None
         if reader is None or self.kind == "print" or not text.strip() or len(text) > 80:
             return self.render(text, xh_pt, color, max_width_pt=max_width_pt)
         from .quality import legibility

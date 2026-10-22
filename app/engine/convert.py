@@ -96,14 +96,14 @@ def url_to_pdf(url, out_path=None):
     with urllib.request.urlopen(req, timeout=30) as r:
         raw = r.read()
         charset = r.headers.get_content_charset() or "utf-8"
+        final = r.geturl() or url              # after the redirects
     text = raw.decode(charset, "replace")
     tmp = tempfile.mkdtemp(prefix="calamo-web-")
-    # pictures with an absolute address are fetched; the page keeps text, headings, tables
-    base = url.rsplit("/", 1)[0] + "/"
+    # pictures are fetched (relative addresses from the page's own); the page keeps text, headings, tables
 
     def fetch(m):
         src = m.group(2)
-        full = src if re.match(r"^https?://", src) else urllib.parse.urljoin(base, src)
+        full = urllib.parse.urljoin(final, src)
         try:
             name = f"img{len(os.listdir(tmp))}" + (os.path.splitext(full.split("?")[0])[1][:5] or ".img")
             req2 = urllib.request.Request(full, headers={"User-Agent": "Mozilla/5.0 CalamoPDF"})

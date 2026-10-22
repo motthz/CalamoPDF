@@ -35,7 +35,7 @@ function saveTabState() {
   S.tabState[tabKey(cur)] = { zoom: S.zoom, scroll: $("#pages").scrollTop, page: S.current };
 }
 async function switchTab(i) {
-  closeEditor(true); closePop(); stopSpeak();
+  await closeEditor(true); closePop(); stopSpeak();
   saveTabState();
   await guarded(async () => {
     const info = await call("switch_tab", i);
@@ -88,16 +88,16 @@ updateInfo = function (info) {
   _updateInfo(info);
   if (!!info.dirty !== !!was) refreshTabs();
 };
-// closing the window: every document with changes is asked about
-requestClose = async function () {
-  closeEditor(true);
+// closing the window (or restarting to update): every document with changes is asked about
+confirmDiscardAll = async function () {
+  await closeEditor(true);
   let dirty = [];
   try { dirty = await call("dirty_tabs"); } catch (e) { /* none */ }
   for (const i of dirty) {
     await switchTab(i);
-    if (!(await confirmDiscard())) return;
+    if (!(await confirmDiscard())) return false;
   }
-  call("close", true);
+  return true;
 };
 
 // ---------------------------------------------------------------- side by side
@@ -197,6 +197,7 @@ function presentGo(d) {
 function presentStart() {
   if (!S.doc) return;
   closeEditor(true); closePop();
+  if (S.sel) selectObj(null);           // the keys of the slides must not reach it
   S.pres = { i: Math.max(S.current, 0) };
   $("#present").hidden = false;
   try { document.documentElement.requestFullscreen && document.documentElement.requestFullscreen().catch(() => {}); } catch (e) { /* windowed */ }
@@ -393,7 +394,7 @@ $("#tableCancel").onclick = $("#tableClose").onclick = () => { $("#tableModal").
 // ---------------------------------------------------------------- OCR, translation, conversions
 async function ocrAll() {
   const n = S.pages.length;
-  let words = 0, read = 0;
+  let words = 0, read = 0, failed = false;
   try {
     for (let i = 0; i < n; i++) {
       busy(`Rendo cercabile il documento… pagina ${i + 1} di ${n}`, i / n);
@@ -402,12 +403,12 @@ async function ocrAll() {
       const r = await call("make_searchable", i);
       words += r.written;
     }
-  } catch (e) { toast(e.message, "err"); }
+  } catch (e) { failed = true; toast(e.message, "err"); }
   finally { busy(false); }
   S.inkCache = {};
   await afterChange();
   renderInkList();
-  toast(words ? `Documento cercabile: ${plural(words, "parola aggiunta", "parole aggiunte")} (Ctrl+F per cercare).` : "Il documento era già cercabile.", "ok");
+  if (!failed) toast(words ? `Documento cercabile: ${plural(words, "parola aggiunta", "parole aggiunte")} (Ctrl+F per cercare).` : "Il documento era già cercabile.", "ok");
 }
 async function translateDoc() {
   const lang = $("#trLang").value;

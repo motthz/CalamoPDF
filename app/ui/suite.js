@@ -80,6 +80,8 @@ setDocUI = function (has) {
 function showPanel(name, quiet) {
   // asked for by the user: the panel opens; chosen by Calamo (quiet): it stays as it is
   if (!quiet && document.body.classList.contains("panel-closed")) setPanel(true, false);
+  // without a document only the settings have a panel to show
+  document.body.classList.toggle("doc-settings", name === "settings" && !S.doc);
   if (name === "settings") {
     $$("#tabs button").forEach(x => x.classList.remove("active"));
   } else {
@@ -311,7 +313,9 @@ async function fieldsChanged(r, quiet) {
 async function fillField(f, value) {
   if (JSON.stringify(f.value) === JSON.stringify(value)) return;
   S.fillFocusAfter = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.fid : null;
-  await guarded(async () => fieldsChanged(await call("fill_fields", [{ page: f.page, id: f.id, value }])));
+  // saving waits for it (commitPending)
+  const p = S.filling = guarded(async () => fieldsChanged(await call("fill_fields", [{ page: f.page, id: f.id, value }])));
+  try { await p; } finally { if (S.filling === p) S.filling = null; }
 }
 function drawFill(P, frag, s) {
   (P.fields || []).forEach(f => {
@@ -725,13 +729,12 @@ Object.assign(COMMANDS, {
     toast("Proprietà applicate: salva per tenerle.", "ok");
   }),
   preflight: () => guarded(async () => renderCheck(await call("preflight")), "Verifica del documento…"),
-  savePdfa: () => guarded(async () => {
-    $("#exportMenu").hidden = true;
+  savePdfa: async () => { $("#exportMenu").hidden = true; await commitPending(); return guarded(async () => {
     const r = await call("save_pdfa");
     if (!r) return;
     if (r.ok) toast("Copia PDF/A salvata: pronta per l'archiviazione.", "ok", reveal(r));
     else toast(`Copia salvata, ma resta da sistemare: ${r.left.map(x => x.label).join(", ")}.`, "warn", reveal(r));
-  }, "Creazione del PDF/A…"),
+  }, "Creazione del PDF/A…"); },
   repair: () => guarded(async () => {
     const r = await call("repair_file");
     if (!r) return;
@@ -770,7 +773,7 @@ function renderCheck(r) {
 // ---------------------------------------------------------------- export in other formats
 async function exportOther(kind, label) {
   $("#exportMenu").hidden = true;
-  closeEditor(true);
+  await commitPending();
   await guarded(async () => {
     const r = await call("export_other", kind);
     busy(false);
@@ -831,7 +834,7 @@ Object.assign(COMMANDS, {
 async function printNow(pages) {
   $("#printMenu").hidden = true;
   if (!S.doc) return;
-  closeEditor(true);
+  await commitPending();
   await guarded(async () => {
     const r = await call("print_now", pages);
     if (r) toast(`${plural(r.pages, "pagina inviata", "pagine inviate")} a «${r.printer}»`, "ok");
@@ -841,6 +844,7 @@ async function printNow(pages) {
 // ---------------------------------------------------------------- printing (the system dialog)
 async function printDoc() {
   if (!S.doc) return;
+  await commitPending();
   let pages = S.pages.map(P => P.i);
   if (pages.length > 40) {
     const v = await modal("Quali pagine stampare?", `Il documento ha ${pages.length} pagine. Lascia vuoto per stamparle tutte, oppure scrivi per esempio 1-5, 8.`,
@@ -927,6 +931,7 @@ $("#batchGo").onclick = () => guarded(async () => {
 // saving rewrites the file: the digital signatures in it would no longer be valid
 const _save = COMMANDS.save;
 COMMANDS.save = async () => {
+  await commitPending();
   if (S.doc && S.doc.dirty && S.props && S.props.signatures) {
     const r = await modal("Il documento è firmato digitalmente", "Salvando le modifiche sullo stesso file le firme non saranno più valide. Ti conviene salvare una copia con un altro nome.",
       [["Annulla", null, "ghost"], ["Salva comunque", "save", "ghost"], ["Salva una copia…", "copy", "primary"]]);
@@ -983,7 +988,7 @@ document.addEventListener("keydown", e => {
     for (const id of ["hubModal", "batchModal", "certModal"]) if (!$("#" + id).hidden) { $("#" + id).hidden = true; if (document.activeElement) document.activeElement.blur(); e.stopImmediatePropagation(); return; }
     if (S.tool === "sigbox") { setTool("edit"); return; }
   }
-  if (e.ctrlKey || e.altKey || !S.doc || e.target.closest("input, textarea, select, [contenteditable]")) return;
+  if (e.ctrlKey || e.altKey || !S.doc || S.pres || e.target.closest("input, textarea, select, [contenteditable]")) return;
   if (!$("#tour").hidden || !$("#modal").hidden) return;
   const more = { c: "fill", l: "link", k: "crop", q: "field" }[k];
   if (more) { setTool(more); e.stopImmediatePropagation(); }

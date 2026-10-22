@@ -85,6 +85,7 @@ class PdfToolsMixin:
             self.ink.pop(i, None)
             self.hands.pop(i, None)
             self.ignored.pop(i, None)
+            self.__dict__.get("_to_learn", set()).discard(i)
 
     # ================================================================== forms
     def _widget(self, page, xref):
@@ -496,6 +497,7 @@ class PdfToolsMixin:
             pass
         data = new.tobytes(garbage=gc(new, 3), deflate=True)
         self.doc = fitz.open(stream=data, filetype="pdf")
+        self.doc_gen += 1                     # readings in progress were made on the old pages
         self.resolver = F.FontResolver(self.doc)
 
     def resize_pages(self, spec="", size="A4", width=None, height=None):

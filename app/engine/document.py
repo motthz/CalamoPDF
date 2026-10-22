@@ -226,6 +226,8 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin, PdfToolsMixin):
         self.title = None        # name of a document not saved yet (converted, translated...)
         self.version = 0         # bumps on every change, per page versions below
         self.page_versions = {}
+        self.doc_gen = 0         # bumps when another document takes the place of this one
+                                 # (open, undo of a whole document), not when saving reloads it
 
     # ------------------------------------------------------------------ lifecycle
     def open(self, path, password=None):
@@ -249,6 +251,7 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin, PdfToolsMixin):
             self.ignored = {}
             self.resolver = F.FontResolver(doc)
             self.version += 1
+            self.doc_gen += 1
             return self.info()
 
     def open_bytes(self, data, title):
@@ -263,6 +266,7 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin, PdfToolsMixin):
             self.ignored = {}
             self.resolver = F.FontResolver(doc)
             self.version += 1
+            self.doc_gen += 1
             return self.info()
 
     def new_blank(self):
@@ -277,6 +281,7 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin, PdfToolsMixin):
             self.ignored = {}
             self.resolver = F.FontResolver(doc)
             self.version += 1
+            self.doc_gen += 1
             return self.info()
 
     def info(self):
@@ -304,8 +309,15 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin, PdfToolsMixin):
                 owner = self._password if getattr(self, "_auth", 0) & 4 else secrets.token_hex(16)
                 crypt = dict(encryption=fitz.PDF_ENCRYPT_AES_256, user_pw=self._password, owner_pw=owner,
                              permissions=getattr(self, "_perm", -1))
-            self.doc.save(tmp, garbage=gc(self.doc, 3), deflate=True, clean=False, **crypt)
-            os.replace(tmp, target)
+            try:
+                self.doc.save(tmp, garbage=gc(self.doc, 3), deflate=True, clean=False, **crypt)
+                os.replace(tmp, target)
+            except Exception:
+                try:                                # no half-written file left next to it
+                    os.remove(tmp)
+                except OSError:
+                    pass
+                raise
             # saving compacts the document in memory and renumbers its objects; PyMuPDF's
             # record of the fonts already written then points at the wrong objects, and text
             # written after the save would be unreadable when copied or searched. Go on from
@@ -327,20 +339,45 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin, PdfToolsMixin):
     def _snapshot(self, page=None):
         """What undo needs to go back. An edit on one page saves only that page (fast and
         small even on big documents); page operations, forms and links save everything."""
+        # the writings are copied: the page goes on changing them (letters learned, marked)
         if page is not None and self._page_only_ok(page):
             one = fitz.open()
             one.insert_pdf(self.doc, from_page=page, to_page=page, links=False, annots=True)
             return ("page", page, one.tobytes(garbage=1, deflate=True), copy.deepcopy(self.ink.get(page)),
-                    self.hands.get(page), self.page_versions.get(page, 0), list(self.ignored.get(page, [])))
-        return ("doc", self.doc.tobytes(), copy.deepcopy(self.ink), dict(self.page_versions), dict(self.hands))
+                    copy.deepcopy(self.hands.get(page)), self.page_versions.get(page, 0),
+                    copy.deepcopy(self.ignored.get(page)))
+        return ("doc", self.doc.tobytes(), copy.deepcopy(self.ink), dict(self.page_versions),
+                copy.deepcopy(self.hands), copy.deepcopy(self.ignored),
+                set(self.__dict__.get("_to_learn", ())))
 
     def _page_only_ok(self, page):
         try:
             p = self.doc[page]
-            # bookmarks are fine: they are put back after the page (see _restore)
-            return len(self.doc) > 1 and not self.doc.is_form_pdf and p.first_link is None
+            # bookmarks are fine: they are put back after the page (see _restore); links from
+            # other pages to this one are not (deleting the page deletes them)
+            return len(self.doc) > 1 and not self.doc.is_form_pdf and p.first_link is None \
+                and page not in self._link_targets()
         except Exception:
             return False
+
+    def _link_targets(self):
+        """Pages that links on other pages go to; remembered until the next change."""
+        doc = self.doc
+        key = (id(doc), self.doc_gen, self.version, len(doc))
+        hit = self.__dict__.get("_links_seen")
+        if hit and hit[0] == key:
+            return hit[1]
+        out = set()
+        for i in range(len(doc)):
+            # read from the page object, without loading pages that have no annotations
+            if doc.xref_get_key(doc.page_xref(i), "Annots")[0] == "null":
+                continue
+            for l in doc[i].get_links():
+                t = l.get("page")
+                if isinstance(t, int) and t >= 0 and t != i:
+                    out.add(t)
+        self._links_seen = (key, out)
+        return out
 
     def _checkpoint(self, page=None):
         self.undo_stack.append(self._snapshot(page))
@@ -368,7 +405,6 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin, PdfToolsMixin):
         snap = src.pop()
         if snap[0] == "page":
             _, i, data, ink, hands, ver, ignored = snap
-            self.ignored[i] = ignored
             dst.append(self._snapshot(i))
             one = fitz.open(stream=data, filetype="pdf")
             toc = self.doc.get_toc(simple=False)     # deleting the page would drop its bookmarks
@@ -376,7 +412,7 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin, PdfToolsMixin):
             self.doc.insert_pdf(one, start_at=i, links=False, annots=True)
             if toc:
                 self.doc.set_toc(toc)
-            for store, value in ((self.ink, ink), (self.hands, hands)):
+            for store, value in ((self.ink, ink), (self.hands, hands), (self.ignored, ignored)):
                 if value is None:
                     store.pop(i, None)
                 else:
@@ -386,8 +422,9 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin, PdfToolsMixin):
                 self.__dict__.setdefault("_to_learn", set()).add(i)       # learned when needed
         else:
             dst.append(self._snapshot())
-            _, data, ink, versions, self.hands = snap
+            _, data, ink, versions, self.hands, self.ignored, self._to_learn = snap
             self.doc = fitz.open(stream=data, filetype="pdf")
+            self.doc_gen += 1
             self.resolver = F.FontResolver(self.doc)
             self.ink = ink
             # every page gets a new version so the UI re-renders it
@@ -902,18 +939,22 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin, PdfToolsMixin):
             for i, page in enumerate(self.doc):
                 d = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE | fitz.TEXT_PRESERVE_LIGATURES)
                 targets = []
-                for bi, b in enumerate(d["blocks"]):
+                for b in d["blocks"]:
                     if b.get("type") != 0:
                         continue
-                    txt = "\n".join("".join(s["text"] for s in l["spans"]) for l in b["lines"]
-                                    if any(s["text"] for s in l["spans"]))
+                    # the text as edit_block sees it: invisible or rotated text is not editable
+                    lines = self._line_list(b, page)
+                    if not lines:
+                        continue
+                    txt, _, _ = self._paragraph(lines, _shown(page, b["bbox"]))
                     if term in txt:
-                        targets.append((bi, txt))
-                if not targets:
-                    continue
-                for bi, txt in targets:
+                        targets.append((list(_shown(page, b["bbox"])), txt))
+                for bbox, txt in targets:
+                    try:
+                        self.edit_block(i, bbox, txt.replace(term, repl), checkpoint=False)
+                    except RuntimeError:
+                        continue                    # this block could not be changed: the next ones still are
                     count += txt.count(term)
-                    self.edit_block(i, list(_shown(page, d["blocks"][bi]["bbox"])), txt.replace(term, repl), checkpoint=False)
                     touched.append(i)
             if not touched:
                 self.undo_stack.pop()
@@ -938,17 +979,23 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin, PdfToolsMixin):
         document in between, so the window stays free. Returns the writings of the page."""
         with self.lock:
             todo = self.__dict__.setdefault("_to_learn", set())
-            sids = []
+            sids, pw = [], None
             if index in todo:
-                todo.discard(index)
                 if self.ink.get(index):
-                    sids = list(self.writings(index, learn=False).libs)
-            doc = self.doc
-        for sid in sids:
+                    pw = self.writings(index, learn=False)
+                    sids = list(pw.libs)
+                if not sids:
+                    todo.discard(index)
+            gen = self.doc_gen
+        # the page stays to be learned until every writing is: an edit made in between
+        # learns what is still missing itself (see writings)
+        for k, sid in enumerate(sids):
             with self.lock:
-                if self.doc is not doc or index >= len(self.doc):
+                if self.doc_gen != gen or index not in self._to_learn or self.hands.get(index) is not pw:
                     break
                 self._relearn(index, {sid})
+                if k == len(sids) - 1:
+                    self._to_learn.discard(index)
         with self.lock:
             return {**self.hand_info(index), "learned": True}
 
@@ -971,13 +1018,13 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin, PdfToolsMixin):
         """Read a page. The slow part (OCR, handwriting model) runs WITHOUT the document lock,
         so the user can keep scrolling and working while pages are being read."""
         with self.lock:
-            doc = self.doc
-            job = prepare_page(doc[index], include_native)
+            gen = self.doc_gen
+            job = prepare_page(self.doc[index], include_native)
             version = self.page_versions.get(index, 0)
             prefer = self._doc_words(index)
         lines = read_page(job, self.learning, lang, reader, LEXICON, prefer, cancelled)
         with self.lock:
-            if self.doc is not doc:
+            if self.doc_gen != gen:
                 raise RuntimeError("Il documento è cambiato durante la lettura.")
             if self.page_versions.get(index, 0) != version:
                 raise RuntimeError(f"La pagina {index + 1} è stata modificata durante la lettura: leggila di nuovo.")
@@ -985,7 +1032,7 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin, PdfToolsMixin):
             lines = [l for l in lines if not self._is_ignored(index, l["bbox"])]
             kept = [l for l in self.ink.get(index, []) if l.get("marked") and l.get("feat")]
             lines = [l for l in lines if not any(_overlap(l["bbox"], k["bbox"]) > 0.5 for k in kept)] + kept
-            old = self.hands.get(index)
+            old, old_lines = self.hands.get(index), self.ink.get(index, [])
             pw = self.hands[index] = PageWritings()
             # lines written the same way (same pen, stroke, slant, size) belong to one writing
             groups = WR.group([l["feat"] for l in lines], boxes=[l["bbox"] for l in lines]) if lines else []
@@ -999,7 +1046,7 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin, PdfToolsMixin):
                 for l in members:
                     l["style"], l["kind"] = sid, kind
             self.ink[index] = lines
-            self._carry_over(old, pw)
+            self._carry_over(old, pw, old_lines, lines)
             # the letters of the writings are learned when they are first needed (rewriting,
             # the panel of the letters: see learn_page), not before the text is shown
             self.__dict__.setdefault("_to_learn", set()).add(index)
@@ -1046,14 +1093,14 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin, PdfToolsMixin):
         """Writing the reading missed, outlined by the user: read it and add it to the page,
         in the writing of the person whose hand it looks like."""
         with self.lock:
-            doc = self.doc
-            job = prepare_page(doc[index], True)
+            gen = self.doc_gen
+            job = prepare_page(self.doc[index], True)
             prefer = self._doc_words(index)
             hs = [l["bbox"][3] - l["bbox"][1] for l in self.ink.get(index, []) if not l.get("synthetic")]
             line_h = float(np.median(hs)) if hs else None
         new = read_region(job, [rect], self.learning, lang, reader, LEXICON, prefer, line_h)
         with self.lock:
-            if self.doc is not doc:
+            if self.doc_gen != gen:
                 raise RuntimeError("Il documento è cambiato durante la lettura.")
             self._checkpoint(index)
             lines = self.ink.setdefault(index, [])
@@ -1086,10 +1133,15 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin, PdfToolsMixin):
             return self._result(index, added=added)
 
     @staticmethod
-    def _carry_over(old, pw):
-        """Letters marked, names and loaded calligraphies survive a new reading of the page."""
+    def _carry_over(old, pw, old_lines=(), lines=()):
+        """Letters marked, names and loaded calligraphies survive a new reading of the page.
+        A marked letter points to its line again: the new line in the same place, if any."""
         if not old:
             return
+        moved = {}
+        for j, l in enumerate(old_lines):
+            best = max(((_overlap(l["bbox"], n["bbox"]), k) for k, n in enumerate(lines)), default=(0, None))
+            moved[j] = best[1] if best[0] > 0.5 else None
         cents = [(lib.feat, lib.kind) for lib in pw.libs.values()]
         sids = list(pw.libs)
         for lib in old.libs.values():
@@ -1100,6 +1152,10 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin, PdfToolsMixin):
                 continue
             new = pw.libs[sids[i]]
             for ch, gs in lib.manual.items():
+                for g in gs:
+                    if g.src and g.src[0] == "manual":
+                        k = moved.get(g.src[1])
+                        g.src = ("manual", k) if k is not None else None
                 new.manual.setdefault(ch, []).extend(gs)
             if lib.loaded:
                 new.loaded, new.loaded_name = lib.loaded, lib.loaded_name
@@ -1651,6 +1707,7 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin, PdfToolsMixin):
             self.ink = {(k if k < index else k - 1): v for k, v in self.ink.items() if k != index}
             self.hands = {(k if k < index else k - 1): v for k, v in self.hands.items() if k != index}
             self.ignored = {(k if k < index else k - 1): v for k, v in self.ignored.items() if k != index}
+            self._to_learn = {(k if k < index else k - 1) for k in self.__dict__.get("_to_learn", ()) if k != index}
             self.page_versions = {i: self.page_versions.get(i, 0) + 1 for i in range(len(self.doc))}
             self._touch()
             return self.info()
@@ -1663,6 +1720,7 @@ class Session(EditingMixin, ExtrasMixin, GraphicsMixin, PdfToolsMixin):
             self.ink = {(k if k <= index else k + 1): v for k, v in self.ink.items()}
             self.hands = {(k if k <= index else k + 1): v for k, v in self.hands.items()}
             self.ignored = {(k if k <= index else k + 1): v for k, v in self.ignored.items()}
+            self._to_learn = {(k if k <= index else k + 1) for k in self.__dict__.get("_to_learn", ())}
             self.page_versions = {i: self.page_versions.get(i, 0) + 1 for i in range(len(self.doc))}
             self._touch()
             return self.info()

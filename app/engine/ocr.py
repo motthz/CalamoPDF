@@ -76,14 +76,40 @@ def available_languages():
 
 
 # --------------------------------------------------------------------------- learning memory
+_learning_lock = threading.Lock()
+_learning = {"data": None}         # one memory for every tab: each would write back its own copy
+
+
+def _learning_load(fallback=None):
+    import copy
+    data = load_json("learning.json", None)
+    if not isinstance(data, dict):            # missing or unreadable: keep what is in memory
+        data = copy.deepcopy(fallback) if isinstance(fallback, dict) else {}
+    data.setdefault("words", {})
+    data.setdefault("lines", {})
+    return data
+
+
 class Learning:
     """Remembers how the user corrected readings, so the app adapts over time."""
 
     def __init__(self):
-        self.data = load_json("learning.json", {"words": {}, "lines": {}})
+        with _learning_lock:
+            if _learning["data"] is None:
+                _learning["data"] = _learning_load()
+
+    @property
+    def data(self):
+        return _learning["data"]
+
+    @data.setter
+    def data(self, value):
+        with _learning_lock:
+            _learning["data"] = value
 
     def save(self):
-        save_json("learning.json", self.data)
+        with _learning_lock:
+            save_json("learning.json", _learning["data"])
 
     @staticmethod
     def _split(word):
@@ -114,20 +140,24 @@ class Learning:
             return 0
         a, b = recognized.split(), corrected.split()
         learned = 0
-        if len(a) == len(b):
-            for x, y in zip(a, b):
-                _, cx, _ = self._split(x)
-                _, cy, _ = self._split(y)
-                if cx and cy and cx != cy:
-                    entry = self.data["words"].setdefault(cx.lower(), {"to": cy, "n": 0})
-                    if entry["to"] != cy:
-                        entry["to"], entry["n"] = cy, 0
-                    entry["n"] += 1
-                    learned += 1
-        else:
-            self.data["lines"][recognized.lower()] = {"to": corrected}
-            learned = 1
-        self.save()
+        with _learning_lock:
+            # what the file holds now (another window may have learned too), then this
+            data = _learning_load(_learning["data"])
+            if len(a) == len(b):
+                for x, y in zip(a, b):
+                    _, cx, _ = self._split(x)
+                    _, cy, _ = self._split(y)
+                    if cx and cy and cx != cy:
+                        entry = data["words"].setdefault(cx.lower(), {"to": cy, "n": 0})
+                        if entry["to"] != cy:
+                            entry["to"], entry["n"] = cy, 0
+                        entry["n"] += 1
+                        learned += 1
+            else:
+                data["lines"][recognized.lower()] = {"to": corrected}
+                learned = 1
+            _learning["data"] = data
+            save_json("learning.json", data)
         return learned
 
     def hints(self, limit=60):
@@ -138,8 +168,9 @@ class Learning:
         return {"words": len(self.data["words"]), "lines": len(self.data["lines"])}
 
     def reset(self):
-        self.data = {"words": {}, "lines": {}}
-        self.save()
+        with _learning_lock:
+            _learning["data"] = {"words": {}, "lines": {}}
+            save_json("learning.json", _learning["data"])
 
 
 # --------------------------------------------------------------------------- page analysis
@@ -363,6 +394,11 @@ def read_page(job, learning, lang_tag=None, reader=None, lexicon=None, prefer=No
         result = _join_pieces(result, rgb, zoom, border)
     # handwriting, and any ink nobody read (the OCR may miss print on a poor photo)
     second = [l for l in result if l["kind"] == "hand" or (l["source"] == "unread" and reader is not None)]
+    # handwriting the OCR already read as good Italian, with nothing to correct: the model
+    # only ever confirms it (or makes it worse). Measured on the 8 test forms: 15% fewer
+    # lines to read, cells read right 43.8% -> 45.1%
+    if lexicon is not None:
+        second = [l for l in second if not _ocr_sure(l, lexicon, prefer)]
     ids = {id(l) for l in second}
     if reader is not None and hasattr(reader, "read_ahead"):
         try:                                   # all the lines at once, several at a time
@@ -588,6 +624,16 @@ def _join_pieces(lines, rgb, zoom, border=None):
         if not joined:
             out.append(l)
     return out
+
+
+def _ocr_sure(line, lexicon, prefer):
+    """An OCR reading of a line that needs no second opinion: at least three letters, nothing
+    doubtful, every word Italian and none to correct, no English."""
+    raw = tidy(line["raw"]) if line["source"] == "ocr" else ""
+    if len(raw) < 3 or _doubt(raw) >= 0.3:
+        return False
+    fixed, n = lexicon.correct_text(raw, prefer)
+    return n == 0 and lexicon.ratio(fixed) >= 1.0 and english_share(fixed) == 0
 
 
 def _second_opinion(line, crop, zoom, reader, lexicon, prefer):

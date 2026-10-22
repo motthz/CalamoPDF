@@ -356,11 +356,14 @@ class Api:
     def open_path(self, path):
         return self._open(path)
 
-    def _open(self, path, password=None):
-        # already open: go to its tab
+    def _open(self, path, password=None, reload=False):
+        # already open: go to its tab (reload: the file under it was just written again)
         for k, t in enumerate(self._tabs):
             if t.path and t.doc and os.path.normcase(os.path.abspath(t.path)) == os.path.normcase(os.path.abspath(path)):
                 self._ti = k
+                if reload:
+                    t.open(path, password)
+                    self._remember(path)
                 return t.info()
         s = self._new_session()
         try:
@@ -486,7 +489,7 @@ class Api:
             return None
         res = FILES.merge(srcs, path)
         if open_after:
-            res["info"] = self._open(path)
+            res["info"] = self._open(path, reload=True)
         return res
 
     @safe
@@ -941,6 +944,12 @@ class Api:
             return None
         dst = os.path.join(SIGN.cert_dir(), os.path.basename(path))
         if os.path.normcase(os.path.abspath(dst)) != os.path.normcase(os.path.abspath(path)):
+            # a certificate with the same name is not overwritten: the copy gets a new name
+            base, ext = os.path.splitext(os.path.basename(path))
+            k = 2
+            while os.path.exists(dst):
+                dst = os.path.join(SIGN.cert_dir(), f"{base} ({k}){ext}")
+                k += 1
             shutil.copyfile(path, dst)
         return {"created": {"path": dst, "name": os.path.splitext(os.path.basename(dst))[0]},
                 "list": SIGN.list_certificates()}
@@ -978,7 +987,7 @@ class Api:
         if not out:
             return None
         res = FILES.repair(src, out)
-        res["info"] = self._open(out)
+        res["info"] = self._open(out, reload=True)
         return res
 
     @safe

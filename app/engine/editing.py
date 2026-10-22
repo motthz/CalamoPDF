@@ -131,6 +131,8 @@ class EditingMixin:
         for name in ("ink", "hands", "ignored"):
             old = getattr(self, name)
             setattr(self, name, {i: old[o] for i, o in enumerate(order) if o is not None and o in old})
+        todo = self.__dict__.get("_to_learn", ())
+        self._to_learn = {i for i, o in enumerate(order) if o is not None and o in todo}
         self.page_versions = {i: (self.page_versions.get(o, 0) if o is not None else 0) + 1
                               for i, o in enumerate(order)}
         self._touch()

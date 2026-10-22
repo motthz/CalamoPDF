@@ -65,4 +65,5 @@ document.addEventListener("contextmenu", e => {
 document.addEventListener("mousedown", e => { if (!e.target.closest(".ctx-menu")) closeCtx(); }, true);
 document.addEventListener("keydown", e => { if (e.key === "Escape") closeCtx(); });
 window.addEventListener("blur", closeCtx);
-document.addEventListener("scroll", closeCtx, true);
+// the thumbnails scroll by themselves to the page just chosen with the right button
+document.addEventListener("scroll", e => { if (e.target.id !== "thumbs") closeCtx(); }, true);
