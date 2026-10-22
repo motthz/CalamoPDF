@@ -20,6 +20,9 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt pyinstaller
 
+      - name: What makes importing onnxruntime crash
+        run: python tools/dll_check.py
+
       - name: Handwriting model cache
         uses: actions/cache@v4
         with:
