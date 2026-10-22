@@ -41,6 +41,19 @@ def model_dir():
     return d
 
 
+def probe_main():
+    """`CalamoPDF.exe --probe-reader`: loads the reader and reads one blank line, in a process
+    of its own. If onnxruntime cannot run on a computer (a system library of another
+    version, a driver) it can take down the whole process with it; here only this one goes,
+    and the app keeps working with Windows OCR alone."""
+    import onnxruntime as ort
+    path = os.path.join(model_dir(), "encoder.onnx")
+    if os.path.exists(path):
+        s = ort.InferenceSession(path, providers=["CPUExecutionProvider"])
+        s.run(None, {s.get_inputs()[0].name: np.zeros((1, 3, 384, 384), np.float32)})
+    print("ok", ort.__version__, flush=True)
+
+
 class HandReader:
     def __init__(self):
         self._lock = threading.Lock()
@@ -54,6 +67,8 @@ class HandReader:
         self._seen = {}                  # line picture -> reading, the most recent 4000
         self._aspects = {}               # line picture -> shape of its cleaned ink
         self._mem = threading.Lock()
+        self._safe = None                # did the reader start in a separate process?
+        self._probe_lock = threading.Lock()
 
     # ------------------------------------------------------------------ installation
     def installed(self):
@@ -61,12 +76,46 @@ class HandReader:
         return all(os.path.exists(os.path.join(d, name)) for name, _ in FILES)
 
     def runtime_ok(self):
+        # looked up, not imported: importing onnxruntime is what safe() tries in another process
+        import importlib.util
         try:
-            import onnxruntime  # noqa: F401
-            import tokenizers  # noqa: F401
-            return True
+            return all(importlib.util.find_spec(m) is not None for m in ("onnxruntime", "tokenizers"))
         except Exception:
             return False
+
+    def safe(self):
+        """Can the reader run in this process? Tried once per start in a separate process
+        (a second or two, in the background at start): a reader that crashes there is not
+        loaded here, and Calamo reads with Windows OCR alone instead of closing."""
+        with self._probe_lock:
+            if self._safe is None:
+                self._safe = self._probe()
+        return self._safe
+
+    def _probe(self):
+        import subprocess
+        import sys
+        if os.environ.get("CALAMO_NO_PROBE"):
+            return True
+        if getattr(sys, "frozen", False):
+            cmd = [sys.executable, "--probe-reader"]
+        else:
+            app = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            cmd = [sys.executable, "-c", f"import sys; sys.path.insert(0, {app!r}); "
+                   "from engine.handreader import probe_main; probe_main()"]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=180,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            if r.returncode == 0 and "ok" in r.stdout:
+                return True
+            why = f"codice {r.returncode & 0xFFFFFFFF:#x}" if r.returncode else "nessuna risposta"
+            tail = (r.stderr or "").strip().splitlines()[-3:]
+        except Exception as e:
+            why, tail = str(e)[:200], []
+        self.error = ("Il lettore della scrittura a mano non riesce a partire su questo computer "
+                      f"({why}): Calamo legge con l'OCR di Windows.")
+        print("probe-reader:", why, *tail, file=sys.stderr, flush=True)
+        return False
 
     def status(self):
         return {"installed": self.installed(), "runtime": self.runtime_ok(), "error": self.error,
@@ -98,6 +147,8 @@ class HandReader:
         """In the background at start: the fast encoder downloaded if missing, and measured
         against the other one on this computer, so the first reading does not wait for it;
         on a computer with a graphics card, its encoder too, measured the same way."""
+        if not self.safe():
+            return
         import onnxruntime as ort
         d = model_dir()
         try:
@@ -114,6 +165,8 @@ class HandReader:
         if self._gpu_found is None:
             found = False
             try:
+                if not self.safe():
+                    raise RuntimeError(self.error)
                 import onnxruntime as ort
                 if "DmlExecutionProvider" in ort.get_available_providers():
                     s = self._gpu_session(ort, os.path.join(model_dir(), "encoder.onnx"))
@@ -145,6 +198,8 @@ class HandReader:
         for url in urls:
             try:
                 self._fetch(url, target + ".new", lambda f: progress and progress(f))
+                if not self.safe():
+                    raise RuntimeError(self.error)
                 import onnxruntime as ort
                 sess = ort.InferenceSession(target + ".new", providers=["CPUExecutionProvider"])
                 if [i.name for i in sess.get_inputs()][:1] != ["pixel_values"]:
@@ -217,6 +272,8 @@ class HandReader:
     # ------------------------------------------------------------------ inference
     def _load(self):
         if self.error:
+            raise RuntimeError(self.error)
+        if self._enc is None and not self.safe():
             raise RuntimeError(self.error)
         try:
             self._open()

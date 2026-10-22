@@ -82,6 +82,7 @@ jobs:
           Start-Process -FilePath dist\CalamoPDF.exe -ArgumentList "--selftest", "samples\esempio.pdf", "`"$out`"" -Wait
           Get-Content $out
           if (-not (Select-String -Path $out -Pattern '"ok": true' -Quiet)) { throw "self-test failed" }
+          if (-not (Select-String -Path $out -Pattern '"readerSafe": true' -Quiet)) { throw "the handwriting reader did not start in its own process" }
           $out2 = Join-Path $env:RUNNER_TEMP "selftest2.json"
           Start-Process -FilePath dist\CalamoPDF-app\CalamoPDF.exe -ArgumentList "--selftest", "samples\esempio.pdf", "`"$out2`"" -Wait
           if (-not (Select-String -Path $out2 -Pattern '"ok": true' -Quiet)) { Get-Content $out2; throw "self-test of the folder build failed" }

@@ -1063,7 +1063,8 @@ class Api:
     def _reader(self):
         """The handwriting reader, if installed and switched on (also used to choose the
         most legible way of rewriting a line)."""
-        if not self._settings.get("handModel", True) or not READER.installed() or not READER.runtime_ok():
+        if (not self._settings.get("handModel", True) or not READER.installed() or not READER.runtime_ok()
+                or not READER.safe()):
             return None
         return READER
 
@@ -1289,11 +1290,7 @@ def selftest(pdf, out):
     report["glyphs"] = len(s.learn_page(0)["hand"]["glyphs"])      # the letters: learned after the text
     report["fastReader"] = READER.fast_installed()
     report["readerDevice"] = READER.device()
-    try:
-        import onnxruntime
-        report["providers"] = onnxruntime.get_available_providers()
-    except Exception:
-        pass
+    report["readerSafe"] = READER.safe()
     if res["ink"]:
         s.edit_ink(0, res["ink"][-1]["id"], "Calamo")
     tmp = tempfile.mkdtemp()
@@ -1336,6 +1333,10 @@ def _crash_log():
 
 
 def main():
+    if "--probe-reader" in sys.argv:          # the reader tried in a process of its own
+        from engine.handreader import probe_main
+        probe_main()
+        return
     if "--startup-test" in sys.argv:          # how long the app takes to be ready (tests)
         with open(sys.argv[sys.argv.index("--startup-test") + 1], "w", encoding="utf-8") as f:
             json.dump({"version": VERSION, "ready": True}, f)
