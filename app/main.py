@@ -9,7 +9,11 @@ import traceback
 import ctypes
 from ctypes import wintypes
 
-import webview
+
+from engine.cppruntime import load_newest  # noqa: E402  (before anything that loads C++ libraries)
+load_newest()
+
+import webview  # noqa: E402
 
 if getattr(sys, "frozen", False):
     BASE = sys._MEIPASS

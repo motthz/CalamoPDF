@@ -2,6 +2,8 @@
 
 **Correzione urgente: la 1.7.2 su alcuni computer non si apriva.** All'avvio la 1.7.2 provava in sottofondo la scheda grafica, e su alcuni driver questa prova faceva chiudere l'app. La 1.7.3 torna al motore della 1.7.1, che usa solo il processore: si apre come prima e legge la scrittura a mano alla stessa velocità della 1.7.1 (dal 44% al 68% più in fretta della 1.6.0). L'uso della scheda grafica è sospeso finché non potrà essere provato senza rischi.
 
+**Trovata la causa.** La libreria che collega Calamo all'OCR di Windows porta con sé una copia vecchia di una libreria di sistema di Microsoft (il runtime C++, versione 14.29). Se l'OCR partiva prima del lettore della scrittura a mano, il lettore (che vuole la 14.40 o successiva) faceva chiudere di colpo l'app; all'avvio i due partono insieme, quindi dipendeva da chi arrivava prima. Ora Calamo carica per prima la versione più recente presente sul computer, e la usano entrambi.
+
 **Calamo non si chiude più per colpa del lettore.** Il lettore della scrittura a mano usa una libreria (onnxruntime) che, su alcuni computer, può far chiudere di colpo il programma che la carica, per esempio per una libreria di sistema di un'altra versione. Ora Calamo la prova prima in un processo separato, in sottofondo all'avvio: se lì si chiude, l'app resta aperta, legge con l'OCR di Windows e nelle Impostazioni spiega il perché.
 
 ## Novità di Calamo PDF Studio 1.7.2

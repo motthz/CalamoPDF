@@ -45,7 +45,15 @@ def probe_main():
     """`CalamoPDF.exe --probe-reader`: loads the reader and reads one blank line, in a process
     of its own. If onnxruntime cannot run on a computer (a system library of another
     version, a driver) it can take down the whole process with it; here only this one goes,
-    and the app keeps working with Windows OCR alone."""
+    and the app keeps working with Windows OCR alone. Windows OCR is loaded first, as in the
+    app (its package carries an old C++ runtime: see cppruntime.load_newest)."""
+    from .cppruntime import load_newest
+    load_newest()
+    try:
+        from . import ocr
+        ocr.available_languages()
+    except Exception:
+        pass
     import onnxruntime as ort
     path = os.path.join(model_dir(), "encoder.onnx")
     if os.path.exists(path):
