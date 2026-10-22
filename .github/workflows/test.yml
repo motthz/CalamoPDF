@@ -20,6 +20,9 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt pyinstaller
 
+      - name: What makes importing onnxruntime crash
+        run: python tools/dll_check.py
+
       - name: Handwriting model cache
         uses: actions/cache@v4
         with:
@@ -30,13 +33,6 @@ jobs:
         env:
           CALAMO_MODEL_DIR: ${{ runner.temp }}/calamo-model
         run: python tools/reader_bench.py
-
-      - name: Handwriting model on the graphics card (DirectML)
-        env:
-          CALAMO_MODEL_DIR: ${{ runner.temp }}/calamo-model
-        run: |
-          python -c "import onnxruntime as o; print('onnxruntime', o.__version__, o.get_available_providers())"
-          python tools/gpu_bench.py
 
       - name: Engine and updater tests
         env:
@@ -89,6 +85,7 @@ jobs:
           Start-Process -FilePath dist\CalamoPDF.exe -ArgumentList "--selftest", "samples\esempio.pdf", "`"$out`"" -Wait
           Get-Content $out
           if (-not (Select-String -Path $out -Pattern '"ok": true' -Quiet)) { throw "self-test failed" }
+          if (-not (Select-String -Path $out -Pattern '"readerSafe": true' -Quiet)) { throw "the handwriting reader did not start in its own process" }
           $out2 = Join-Path $env:RUNNER_TEMP "selftest2.json"
           Start-Process -FilePath dist\CalamoPDF-app\CalamoPDF.exe -ArgumentList "--selftest", "samples\esempio.pdf", "`"$out2`"" -Wait
           if (-not (Select-String -Path $out2 -Pattern '"ok": true' -Quiet)) { Get-Content $out2; throw "self-test of the folder build failed" }

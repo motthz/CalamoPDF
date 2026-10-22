@@ -11,8 +11,7 @@ winrt-Windows.Globalization>=3.0
 winrt-Windows.Graphics.Imaging>=3.0
 winrt-Windows.Media.Ocr>=3.0
 winrt-Windows.Storage.Streams>=3.0
-onnxruntime-directml>=1.17; sys_platform == "win32"
-onnxruntime>=1.17; sys_platform != "win32"
+onnxruntime>=1.17
 tokenizers>=0.15
 python-pptx>=1.0
 pyhanko>=0.25

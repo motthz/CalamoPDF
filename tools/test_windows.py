@@ -303,6 +303,20 @@ def test_reader_speed():
     check("reader speed: as accurate", e_new <= e_old + 0.05, f"errore {e_old:.2f} -> {e_new:.2f}")
 
 
+def test_reader_after_windows_ocr():
+    """Windows OCR loaded first, then the reader, in a fresh process as in the app: the winrt
+    package brings an old C++ runtime that made onnxruntime crash (1.7.2 did not open)."""
+    app = os.path.join(ROOT, "app")
+    code = (f"import sys; sys.path.insert(0, {app!r}); from engine.cppruntime import load_newest; load_newest(); "
+            "from winrt.windows.media.ocr import OcrEngine; import onnxruntime; print('ok')")
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=300)
+    check("reader: loads after Windows OCR without crashing", r.returncode == 0 and "ok" in r.stdout,
+          f"codice {r.returncode & 0xFFFFFFFF:#x}")
+    from engine.handreader import HandReader
+    h = HandReader()
+    check("reader: started in a process of its own", h.safe(), h.error or "")
+
+
 def test_reader_gpu_path():
     """The image part read on another device (the graphics card, simulated here with a second
     session on the processor): the same readings; a device that fails mid-way leaves the
@@ -921,7 +935,7 @@ def test_release_check():
 
 
 if __name__ == "__main__":
-    for t in (test_ocr, test_writings, test_skewed_scan, test_handreader, test_reader_speed, test_reader_gpu_path, test_reader_in_analysis, test_table_form, test_rewrite_keeps_background, test_remove_and_mark,
+    for t in (test_ocr, test_writings, test_skewed_scan, test_handreader, test_reader_speed, test_reader_after_windows_ocr, test_reader_gpu_path, test_reader_in_analysis, test_table_form, test_rewrite_keeps_background, test_remove_and_mark,
               test_rotated_page_edit, test_editing, test_more, test_graphics, test_real_services, test_export_scan, test_print_now, test_portable_swap,
               test_setup_script, test_release_check):
         try:
