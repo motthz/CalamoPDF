@@ -165,6 +165,7 @@ function setDocUI(has) {
   $("#welcome").hidden = has;
   // without a document the start screen has the whole window: the side panels would be empty
   document.body.classList.toggle("no-doc", !has);
+  if (has) document.body.classList.remove("doc-settings");
 }
 // the panel on the right: hidden or shown by the user (remembered), closed by itself on a
 // narrow window until the user opens it
@@ -204,6 +205,19 @@ async function openDialog() {
 async function newDoc() {
   if (!(await confirmDiscard())) return;
   await guarded(async () => loadDoc(await call("new_doc")));
+}
+// before closing the window: every open document (more.js asks about every tab)
+async function confirmDiscardAll() {
+  await closeEditor(true);
+  return confirmDiscard();
+}
+// what is still being typed goes in before saving, exporting or printing: the text editor,
+// a form field (it commits on change / blur) and a field value still on its way
+async function commitPending() {
+  await closeEditor(true);
+  const a = document.activeElement;
+  if (a && a !== document.body && a.blur) a.blur();
+  if (S.filling) await S.filling.catch(() => {});
 }
 async function confirmDiscard() {
   if (!S.doc || !S.doc.dirty) return true;
@@ -280,6 +294,7 @@ function unloadPage(P) {
   if (!$(".shimmer", P.el)) P.el.insertAdjacentHTML("afterbegin", '<div class="shimmer"></div>');
 }
 function buildPages() {
+  S.pagesGen = (S.pagesGen || 0) + 1;   // the pages were added, removed or reloaded
   const wrap = $("#pages"), thumbs = $("#thumbs");
   (S.pages || []).forEach(P => { release(P.img.getAttribute("src")); release($("img", P.th).getAttribute("src")); });
   wrap.innerHTML = ""; thumbs.innerHTML = "";
@@ -510,7 +525,11 @@ function setTool(t) {
   $("#stTool").textContent = TOOL_NAMES[t];
   showToolOpts(t);
   if (t === "hand" && !S.glyphCount)
-    toast("Questa pagina non ha ancora una calligrafia: analizzala, oppure usa una calligrafia ricordata. Nel frattempo uso un carattere calligrafico.", "warn");
+    toast(S.learningPage === S.current
+      ? "Sto ancora imparando la calligrafia di questa pagina: tra qualche secondo scrivo con le sue lettere."
+      : (S.inkCache[S.current] || []).length
+        ? "La scrittura a mano di questa pagina è troppo poca o poco chiara per impararne le lettere: uso un carattere calligrafico. Puoi segnare tu le lettere (Segna lettere) o usare una calligrafia ricordata."
+        : "Questa pagina non ha ancora una calligrafia: analizzala, oppure usa una calligrafia ricordata. Nel frattempo uso un carattere calligrafico.", "warn");
 }
 $("#stage").className = "stage tool-edit";
 setDocUI(false);
@@ -1056,24 +1075,27 @@ $("#stTaskCancel").onclick = async () => {
 async function analyze(all) {
   if (!S.doc) return;
   if (reading) { toast("Sto già leggendo: aspetta che finisca o interrompi la lettura.", ""); return; }
-  const doc = S.docGen;
+  const doc = S.docGen, layout = S.pagesGen;
   const pages = all ? S.pages.map(P => P.i) : [S.current];
   const job = reading = { cancelled: false, frac: 0 };
-  let found = 0, done = 0;
+  let found = 0, done = 0, moved = false;
   const skipped = [];
   try {
     for (let k = 0; k < pages.length && !job.cancelled; k++) {
       const i = pages[k];
+      // pages added or removed meanwhile: the numbers taken at the start are no longer those
+      if (S.pagesGen !== layout || i >= S.pages.length) { moved = true; break; }
       job.frac = k / pages.length;
       taskBar(all ? `Lettura pagina ${i + 1} (${k + 1} di ${pages.length})…` : `Lettura della pagina ${i + 1}…`, job.frac);
       let r;
       try { r = await call("analyze", i); }
       catch (e) {
         if (job.cancelled || !S.doc || S.docGen !== doc) break;
-        if (/modificata durante la lettura/.test(e.message)) { skipped.push(i + 1); continue; }
+        if (/cambiato durante la lettura|modificata durante la lettura/.test(e.message)) { skipped.push(i + 1); continue; }
         throw e;
       }
       if (!S.doc || S.docGen !== doc) break;
+      if (S.pagesGen !== layout || i >= S.pages.length) { moved = true; break; }
       done++;
       applyInkResult(i, r);
       found += r.ink.length;
@@ -1085,10 +1107,12 @@ async function analyze(all) {
     if (done && pages.includes(S.current)) {
       const cur = S.current;
       status("Imparo la calligrafia della pagina…");
+      S.learningPage = cur;
       call("learn_page", cur).then(info => { if (S.docGen === doc) applyHand(info, cur); })
-        .catch(() => {}).finally(() => status(""));
+        .catch(() => {}).finally(() => { if (S.learningPage === cur) S.learningPage = null; status(""); });
     }
     if (job.cancelled) { toast(`Lettura interrotta: ${done} ${done === 1 ? "pagina letta" : "pagine lette"}.`, ""); return; }
+    if (moved) { toast(`Le pagine sono cambiate durante la lettura: ${done} ${done === 1 ? "pagina letta" : "pagine lette"}, rileggi le altre quando vuoi.`, ""); return; }
     if (skipped.length) toast(`Hai modificato ${skipped.length === 1 ? "la pagina " : "le pagine "}${skipped.join(", ")} durante la lettura: rileggi${skipped.length === 1 ? "la" : "le"} quando vuoi.`, "");
     if (!found) toast("Non ho trovato scrittura a mano o testo scansionato.", "");
     else {
@@ -1439,8 +1463,7 @@ async function checkUpdate(manual) {
   }
 }
 async function restartToUpdate() {
-  closeEditor(true);
-  if (await confirmDiscard()) await guarded(() => call("restart_to_update"));
+  if (await confirmDiscardAll()) await guarded(() => call("restart_to_update"));
 }
 
 // ---------------------------------------------------------------- search
@@ -1472,6 +1495,7 @@ $("#replaceInput").addEventListener("keydown", e => { if (e.key === "Escape") cm
 
 // ---------------------------------------------------------------- commands
 async function save() {
+  await commitPending();
   return guarded(async () => {
     const info = await call("save");
     if (!info) return null;
@@ -1487,7 +1511,7 @@ function pagesRead() {
 }
 async function doExport(kind) {
   $("#exportMenu").hidden = true;
-  closeEditor(true);
+  await commitPending();
   try {
     const r = await call(kind === "docx" ? "export_docx" : "export_xlsx");
     busy(false);
@@ -1502,7 +1526,7 @@ const COMMANDS = {
   togglePanel: () => setPanel(document.body.classList.contains("panel-closed"), true),
   open: openDialog, newDoc,
   save: () => save(),
-  saveAs: async () => { $("#exportMenu").hidden = true; await guarded(async () => { const i = await call("save_as"); if (i) { updateInfo(i); toast("Copia salvata", "ok"); } }); },
+  saveAs: async () => { $("#exportMenu").hidden = true; await commitPending(); await guarded(async () => { const i = await call("save_as"); if (i) { updateInfo(i); toast("Copia salvata", "ok"); } }); },
   undo: () => guarded(async () => { closeEditor(false); afterChange(await call("undo")); }),
   redo: () => guarded(async () => { closeEditor(false); afterChange(await call("redo")); }),
   zoomIn: () => setZoom(S.zoom * 1.2), zoomOut: () => setZoom(S.zoom / 1.2), zoomFit,
@@ -1633,12 +1657,12 @@ $$(".win-btn").forEach(b => b.onclick = async () => {
 });
 $(".titlebar").addEventListener("dblclick", e => { if (!e.target.closest(".win-btn")) call("toggle_maximize"); });
 async function requestClose() {
-  closeEditor(true);
-  if (await confirmDiscard()) call("close", true);
+  if (await confirmDiscardAll()) call("close", true);
 }
 
 // keyboard
 document.addEventListener("keydown", e => {
+  if (S.pres) return;                    // presenting: more.js has the keys
   const typing = e.target.closest("input, textarea, select, [contenteditable]");
   const k = e.key.toLowerCase();
   if (e.ctrlKey) {
@@ -1692,6 +1716,17 @@ document.addEventListener("dragleave", e => { if (!e.relatedTarget) document.bod
 document.addEventListener("drop", e => { e.preventDefault(); document.body.classList.remove("drag-over"); });
 window.addEventListener("resize", debounce(() => { positionEditBar(); positionPop(); }, 50));
 window.addEventListener("resize", debounce(() => { if (S.autoFit && S.pages && S.pages.length) zoomFit(); }, 150));
+// the page area also changes width without the window doing so: the side column of "Affianca",
+// the panel on the right. A page fitted to the width is fitted again (it was cut on the right)
+if (window.ResizeObserver) {
+  let lastW = 0;
+  new ResizeObserver(debounce(() => {
+    const w = $("#pages").clientWidth;
+    if (Math.abs(w - lastW) < 2) return;
+    lastW = w;
+    if (S.autoFit && S.pages && S.pages.length) zoomFit();
+  }, 120)).observe($("#pages"));
+}
 
 // ---------------------------------------------------------------- first-run tutorial
 const TOUR = [
@@ -1741,8 +1776,9 @@ $("#tourSkip").onclick = endTour;
 // API used by Python
 window.app = {
   progress(label, i, n) { busy(`${label}… ${i + 1}/${n}`, (i + 1) / n); },
-  requestClose,
-  openPath,
+  // more.js replaces these with the versions that know about the tabs: look them up when called
+  requestClose: () => requestClose(),
+  openPath: path => openPath(path),
   updateProgress(f) {
     const v = S.update ? S.update.version : "";
     status(`Scaricamento aggiornamento ${v}… ${Math.round(f * 100)}%`);

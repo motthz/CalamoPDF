@@ -760,6 +760,8 @@ button:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 1p
 .tool-more { display: flex; }
 .more-btn { display: flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 6px; color: var(--text-2); font-weight: 500; }
 .more-btn svg { width: 16px; height: 16px; }
+/* the tool in use from the menu: a long name ("Segna una scritta") must not push the bar past the window */
+.more-btn span { max-width: 88px; overflow: hidden; text-overflow: ellipsis; }
 .more-btn .chev { width: 13px; height: 13px; margin-left: -2px; opacity: .7; }
 .more-btn:hover { color: var(--text); background: var(--hover); }
 .more-btn.active { color: var(--text); background: var(--raised); box-shadow: 0 0 0 1px var(--line-2), 0 1px 2px rgba(0,0,0,.18); }
@@ -963,6 +965,10 @@ body.resizing-el, body.resizing-el * { cursor: nwse-resize !important; }
 /* the start screen without a document: no empty side panels */
 body.no-doc .workspace { grid-template-columns: minmax(0, 1fr) !important; }
 body.no-doc .sidebar, body.no-doc .inspector { display: none !important; }
+/* the settings are there also without a document (language, handwriting reader, updates) */
+body.no-doc.doc-settings:not(.panel-closed) .workspace { grid-template-columns: minmax(0, 1fr) 330px !important; }
+body.no-doc.doc-settings:not(.panel-closed) .inspector { display: flex !important; }
+body.no-doc .inspector #tabs { display: none; }
 /* the panel on the right, hidden by the user or on a narrow window */
 body.panel-closed .workspace { grid-template-columns: 196px minmax(0, 1fr) 0; }
 body.panel-closed .workspace.side2 { grid-template-columns: 196px 196px minmax(0, 1fr) 0; }

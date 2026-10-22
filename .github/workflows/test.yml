@@ -50,6 +50,11 @@ jobs:
           python tools/page_bench.py --app "$env:RUNNER_TEMP/v160/app" --out "$env:RUNNER_TEMP/old.json"
           python tools/page_bench.py --out "$env:RUNNER_TEMP/new.json"
           python tools/page_bench.py --compare "$env:RUNNER_TEMP/old.json" "$env:RUNNER_TEMP/new.json"
+          git fetch --depth 1 origin tag v1.7.1
+          git worktree add "$env:RUNNER_TEMP/v171" v1.7.1
+          python tools/page_bench.py --app "$env:RUNNER_TEMP/v171/app" --out "$env:RUNNER_TEMP/v171.json"
+          "--- 1.7.1 contro questa versione"
+          python tools/page_bench.py --compare "$env:RUNNER_TEMP/v171.json" "$env:RUNNER_TEMP/new.json"
 
       - name: PDF tools tests (forms, pages, PDF/A, signatures, export, many files)
         run: python tools/test_pdftools.py

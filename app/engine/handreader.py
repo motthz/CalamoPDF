@@ -100,6 +100,13 @@ class HandReader:
                 self._safe = self._probe()
         return self._safe
 
+    def ready(self):
+        """Like safe(), without waiting: False while the start-up probe has not decided
+        (callers holding the document lock must not wait for it)."""
+        if self._safe is None and os.environ.get("CALAMO_NO_PROBE"):
+            return True
+        return self._safe is True
+
     def _probe(self):
         import subprocess
         import sys
@@ -279,12 +286,14 @@ class HandReader:
 
     # ------------------------------------------------------------------ inference
     def _load(self):
+        """Opens the model if needed. Returns the readers to use: a list of their own, so a
+        new encoder swapped in meanwhile (see _download_extra) does not empty it."""
         if self.error:
             raise RuntimeError(self.error)
         if self._enc is None and not self.safe():
             raise RuntimeError(self.error)
         try:
-            self._open()
+            return self._open()
         except Exception as e:                  # a broken download: don't retry on every line
             self.error = f"Lettore non disponibile: {e}"
             self._enc = None
@@ -292,8 +301,8 @@ class HandReader:
 
     def _open(self):
         with self._lock:
-            if self._enc is not None:
-                return
+            if self._enc is not None and self._lanes:
+                return self._lanes
             import onnxruntime as ort
             from tokenizers import Tokenizer
             d = model_dir()
@@ -301,21 +310,24 @@ class HandReader:
             # this computer: on some processors the encoder of the first download already is
             fast = self.use_fast and os.path.exists(os.path.join(d, FAST[0])) and self._fast_wins(ort, d)
             enc = FAST[0] if fast else "encoder.onnx"
-            # two readers side by side, with half of the cores each, read more lines in the
-            # same time than one with all of them (the model does not use many cores well)
+            # one reader per core, each with one thread, read the lines of a page side by side:
+            # the model does not use many cores well, and the text of each line is written in
+            # Python step by step, so readers of their own overlap that too. Measured on the 8
+            # test forms (4 cores): 2 readers x 2 threads 145 s, 4 x 1 111 s, 6 or 8 x 1 about
+            # 120 s and 130 MB more memory for each one
             cores = max(1, os.cpu_count() or 2)
-            lanes = max(1, min(4, cores // 2))      # 2 on 4 cores, 4 on 8 or more
-            self._lanes = []
+            lanes = min(cores, 6)
+            new = []
             for _ in range(lanes):
                 opts = ort.SessionOptions()
                 opts.intra_op_num_threads = max(1, cores // lanes)
                 opts.inter_op_num_threads = 1
                 prov = ["CPUExecutionProvider"]
-                self._lanes.append(types.SimpleNamespace(
+                new.append(types.SimpleNamespace(
                     lock=threading.Lock(),
                     enc=ort.InferenceSession(os.path.join(d, enc), opts, providers=prov),
                     dec=ort.InferenceSession(os.path.join(d, "decoder.onnx"), opts, providers=prov)))
-            self._enc, self._dec = self._lanes[0].enc, self._lanes[0].dec
+            self._enc, self._dec = new[0].enc, new[0].dec
             self._gpu = None
             try:
                 if (self.use_gpu and os.path.exists(os.path.join(d, GPU[0]))
@@ -348,6 +360,8 @@ class HandReader:
             self._dec_inputs = {i.name: i for i in self._dec.get_inputs()}
             self._logits = [self._dec.get_outputs()[0].name]
             self._enc_in = self._enc.get_inputs()[0].name
+            self._lanes = new                    # only now: readers never see it half built
+            return new
 
     @staticmethod
     def _fast_wins(ort, d):
@@ -540,21 +554,22 @@ class HandReader:
         key = self._key(rgb, max_tokens)
         hit = self._seen.get(key)
         if hit is None:
-            self._load()
-            hit = self._read(rgb, max_tokens, self._free_lane())
+            lanes = self._load()
+            hit = self._read(rgb, max_tokens, self._free_lane(lanes))
             self._remember(key, hit)
         return hit
 
-    def _free_lane(self):
-        for lane in self._lanes:
+    @staticmethod
+    def _free_lane(lanes):
+        for lane in lanes:
             if not lane.lock.locked():
                 return lane
-        return self._lanes[0]
+        return lanes[0]
 
     def read_ahead(self, crops, max_tokens=48, cancelled=None):
         """Read many lines at once, each reader taking the next one as soon as it is free;
         the results wait in memory for read(). Returns how many were read."""
-        self._load()
+        lanes = self._load()
         todo, keys = [], set()
         for c in crops:
             c = np.ascontiguousarray(c)
@@ -579,17 +594,17 @@ class HandReader:
                     self._remember(k, self._read(c, max_tokens, lane))
                 except Exception:
                     return
-        threads = [threading.Thread(target=work, args=(lane,), daemon=True) for lane in self._lanes[1:]]
+        threads = [threading.Thread(target=work, args=(lane,), daemon=True) for lane in lanes[1:]]
         for t in threads:
             t.start()
-        work(self._lanes[0])
+        work(lanes[0])
         for t in threads:
             t.join()
         return len(todo)
 
     def _read(self, rgb, max_tokens, lane=None):
-        self._load()
-        lane = lane or self._lanes[0]
+        lanes = self._load()
+        lane = lane or lanes[0]
         px = self._pixels(rgb)
         hidden, gpu = None, self._gpu
         if gpu is not None:                      # the image on the graphics card, one at a time,

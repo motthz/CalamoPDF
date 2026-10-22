@@ -1,10 +1,26 @@
 ## Novità di Calamo PDF Studio 1.7.3
 
-**Correzione urgente: la 1.7.2 su alcuni computer non si apriva.** All'avvio la 1.7.2 provava in sottofondo la scheda grafica, e su alcuni driver questa prova faceva chiudere l'app. La 1.7.3 torna al motore della 1.7.1, che usa solo il processore: si apre come prima e legge la scrittura a mano alla stessa velocità della 1.7.1 (dal 44% al 68% più in fretta della 1.6.0). L'uso della scheda grafica è sospeso finché non potrà essere provato senza rischi.
+**La 1.7.2 su alcuni computer non si apriva: corretto.** La libreria che collega Calamo all'OCR di Windows porta con sé una copia vecchia di una libreria di sistema di Microsoft (il runtime C++, versione 14.29). Se l'OCR partiva prima del lettore della scrittura a mano, il lettore (che vuole la 14.40 o successiva) faceva chiudere di colpo l'app; all'avvio i due partono insieme, quindi dipendeva da chi arrivava prima. Ora Calamo carica per prima la versione più recente presente sul computer, e la usano entrambi. In più il lettore viene provato prima in un processo separato: se lì si chiudesse, l'app resta aperta, legge con l'OCR di Windows e nelle Impostazioni spiega il perché. L'uso della scheda grafica della 1.7.2 è sospeso finché non potrà essere provato senza rischi.
 
-**Trovata la causa.** La libreria che collega Calamo all'OCR di Windows porta con sé una copia vecchia di una libreria di sistema di Microsoft (il runtime C++, versione 14.29). Se l'OCR partiva prima del lettore della scrittura a mano, il lettore (che vuole la 14.40 o successiva) faceva chiudere di colpo l'app; all'avvio i due partono insieme, quindi dipendeva da chi arrivava prima. Ora Calamo carica per prima la versione più recente presente sul computer, e la usano entrambi.
+**Scrittura a mano letta un terzo più in fretta.** Sugli stessi 8 moduli compilati a mano, rispetto alla 1.7.2 sullo stesso computer: **−34% di tempo** (da 174 a 115 secondi), e un po' più precisa (celle lette giuste dal 43,8% al 45,1%).
+- **Un lettore per ogni core** del processore (fino a 6), ciascuno con il suo filo di calcolo, invece di due lettori con due fili ciascuno: le righe di una pagina vengono lette davvero in parallelo (−23%).
+- **Niente seconda lettura quando non serve**: se l'OCR di Windows ha già letto una riga a mano come italiano corretto, parola per parola, il lettore dedicato non la rilegge (15% di righe in meno). Su quelle righe il lettore al massimo confermava, a volte peggiorava.
 
-**Calamo non si chiude più per colpa del lettore.** Il lettore della scrittura a mano usa una libreria (onnxruntime) che, su alcuni computer, può far chiudere di colpo il programma che la carica, per esempio per una libreria di sistema di un'altra versione. Ora Calamo la prova prima in un processo separato, in sottofondo all'avvio: se lì si chiude, l'app resta aperta, legge con l'OCR di Windows e nelle Impostazioni spiega il perché.
+**Controllo completo dell'app, funzione per funzione.** Ogni schermata provata da utente, con screenshot, e il codice rivisto. Corretti:
+- **Chiudere la finestra** (Alt+F4, barra delle applicazioni) o **riavviare per aggiornare** chiedeva di salvare solo il documento aperto, non quelli nelle altre schede: le loro modifiche andavano perse. Ora chiede per ogni scheda.
+- **Ctrl+S** salvava senza l'ultima modifica in corso (il testo che stavi scrivendo o il campo del modulo appena compilato). Lo stesso per esportare e stampare.
+- **Aggiornamento della versione installata**: aspettava inutilmente due minuti e poteva chiudere Calamo se lo riaprivi nel frattempo.
+- **Annulla** su una pagina toglieva i collegamenti di altre pagine che puntavano a quella (per esempio un indice cliccabile) e non ripristinava le scritture a mano della pagina né le zone segnate come "non è una scritta".
+- **Salvare durante la lettura** delle pagine interrompeva la lettura; cancellare, inserire o spostare pagine mentre si leggeva faceva leggere le pagine sbagliate.
+- **Le correzioni imparate** in una scheda venivano cancellate da quelle imparate in un'altra.
+- **Sostituisci tutto** si fermava a metà su testo invisibile (lo strato OCR delle scansioni) o ruotato.
+- **Le Impostazioni** non si aprivano dalla schermata iniziale, senza un documento: ora sì (lingua, lettore della scrittura a mano, aggiornamenti).
+- **Affianca**: la pagina restava allo zoom di prima e veniva tagliata a destra. Ora si adatta.
+- **Presentazione**: Backspace (pagina indietro) cancellava l'oggetto selezionato.
+- La barra degli strumenti usciva dalla finestra con alcuni strumenti del menu Altro ("Segna una scritta"); il menu del tasto destro a volte si chiudeva da solo; importare un certificato con lo stesso nome di un altro lo sovrascriveva; unendo o riparando un file già aperto la scheda mostrava la versione vecchia; *Rendi cercabile* annunciava il successo anche dopo un errore; le immagini delle pagine web convertite da un indirizzo senza percorso andavano perse; un salvataggio fallito lasciava un file temporaneo accanto al PDF.
+- Messaggi più chiari quando la calligrafia di una pagina si sta ancora imparando o è troppo poca per impararla.
+
+**Rilascio più sicuro.** Prima di pubblicare una versione, i test automatici ora provano anche la versione installata (non solo quella portabile), controllano che la finestra parta davvero e che il lettore della scrittura a mano si avvii: la 1.7.2 non sarebbe uscita.
 
 ## Novità di Calamo PDF Studio 1.7.2
 

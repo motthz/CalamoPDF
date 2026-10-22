@@ -56,13 +56,33 @@ jobs:
           & $iscc "/DAppVersion=$env:APP_VERSION" installer.iss
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
 
-      - name: Self-test of the built exe
+      # nothing is published unless both builds (portable one-file exe and installed folder) pass
+      - name: Self-test of the built exe (portable and installed folder)
         shell: pwsh
         run: |
-          $out = Join-Path $env:RUNNER_TEMP "selftest.json"
-          Start-Process -FilePath dist\CalamoPDF.exe -ArgumentList "--selftest", "samples\esempio.pdf", "`"$out`"" -Wait
-          Get-Content $out
-          if (-not (Select-String -Path $out -Pattern '"ok": true' -Quiet)) { throw "self-test failed" }
+          foreach ($exe in @("dist\CalamoPDF.exe", "dist\CalamoPDF-app\CalamoPDF.exe")) {
+            $out = Join-Path $env:RUNNER_TEMP "selftest.json"
+            Remove-Item $out -ErrorAction SilentlyContinue
+            Start-Process -FilePath $exe -ArgumentList "--selftest", "samples\esempio.pdf", "`"$out`"" -Wait
+            if (-not (Test-Path $out)) { throw "self-test of $exe wrote nothing" }
+            Get-Content $out
+            if (-not (Select-String -Path $out -Pattern '"ok": true' -Quiet)) { throw "self-test of $exe failed" }
+            if (-not (Select-String -Path $out -Pattern '"readerSafe": true' -Quiet)) { throw "$exe: the handwriting reader did not start in its own process" }
+          }
+
+      - name: Start-up check (portable and installed folder)
+        shell: pwsh
+        run: |
+          $ready = Join-Path $env:RUNNER_TEMP "ready.json"
+          foreach ($exe in @("dist\CalamoPDF.exe", "dist\CalamoPDF-app\CalamoPDF.exe")) {
+            Remove-Item $ready -ErrorAction SilentlyContinue
+            $t = (Measure-Command { Start-Process -FilePath $exe -ArgumentList "--startup-test", "`"$ready`"" -Wait }).TotalSeconds
+            if (-not (Test-Path $ready)) { throw "$exe did not start" }
+            $r = Get-Content $ready -Raw | ConvertFrom-Json
+            if (-not $r.ready) { throw "$exe did not get ready" }
+            if ($r.version -ne $env:APP_VERSION) { throw "$exe reports version $($r.version), expected $env:APP_VERSION" }
+            "{0}: {1:N1}s" -f $exe, $t
+          }
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
