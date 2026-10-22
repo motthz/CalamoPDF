@@ -67,7 +67,7 @@ jobs:
             if (-not (Test-Path $out)) { throw "self-test of $exe wrote nothing" }
             Get-Content $out
             if (-not (Select-String -Path $out -Pattern '"ok": true' -Quiet)) { throw "self-test of $exe failed" }
-            if (-not (Select-String -Path $out -Pattern '"readerSafe": true' -Quiet)) { throw "$exe: the handwriting reader did not start in its own process" }
+            if (-not (Select-String -Path $out -Pattern '"readerSafe": true' -Quiet)) { throw "${exe}: the handwriting reader did not start in its own process" }
           }
 
       - name: Start-up check (portable and installed folder)
